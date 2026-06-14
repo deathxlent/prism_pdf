@@ -1,0 +1,14 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+aiosqlite==0.21.0
+PyMuPDF==1.25.3
+Pillow==11.2.1
+ultralytics==8.3.144
+huggingface_hub==0.32.4
+transformers>=4.35.0
+torch>=2.0.0
+torchvision>=0.15.0
+paddleocr==2.9.1
+paddlepaddle==3.0.0
+numpy<2

@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF 高精度解析系统</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="navbar-container">
+            <div class="navbar-brand">
+                <i class="fas fa-file-pdf"></i>
+                <span>PDF 解析管理系统</span>
+            </div>
+            <ul class="navbar-menu" id="navbar-menu">
+                <li class="nav-item active" data-route="home">
+                    <a href="#/home">
+                        <i class="fas fa-home"></i>
+                        <span>首页</span>
+                    </a>
+                </li>
+            </ul>
+        </div>
+    </nav>
+
+    <main id="app-container">
+        <div id="page-home" class="page active">
+            <section id="upload-section" class="card">
+                <h2><i class="fas fa-cloud-upload-alt"></i> 上传 PDF 文件</h2>
+                <div id="drop-zone" class="drop-zone">
+                    <i class="fas fa-file-upload"></i>
+                    <p>拖拽 PDF 文件到此处，或点击选择文件</p>
+                    <input type="file" id="file-input" accept=".pdf" hidden>
+                </div>
+                <div id="upload-progress" class="progress-bar hidden">
+                    <div class="progress-fill"></div>
+                    <span class="progress-text">0%</span>
+                </div>
+                <div id="upload-result" class="result-msg hidden"></div>
+            </section>
+
+            <section id="documents-section" class="card">
+                <div class="section-header">
+                    <h2><i class="fas fa-folder-open"></i> 文档管理</h2>
+                    <div class="view-toggle">
+                        <button class="view-btn active" data-view="list" title="列表视图">
+                            <i class="fas fa-list"></i>
+                        </button>
+                        <button class="view-btn" data-view="grid" title="书架视图">
+                            <i class="fas fa-th-large"></i>
+                        </button>
+                    </div>
+                </div>
+                <div id="documents-list" class="documents-list-view active"></div>
+                <div id="documents-grid" class="documents-grid-view"></div>
+            </section>
+        </div>
+
+        <div id="page-detail" class="page">
+            <div class="detail-header">
+                <button class="btn btn-outline" onclick="navigateTo('home')">
+                    <i class="fas fa-arrow-left"></i> 返回
+                </button>
+                <h2 id="detail-title">文档详情</h2>
+                <div class="detail-actions">
+                    <span id="detail-status" class="status-badge"></span>
+                    <div id="detail-progress-container" class="detail-progress hidden">
+                        <div class="detail-progress-bar">
+                            <div id="detail-progress-fill" class="detail-progress-fill"></div>
+                        </div>
+                        <span id="detail-progress-text" class="detail-progress-text">0%</span>
+                        <span id="detail-progress-message" class="detail-progress-message"></span>
+                    </div>
+                    <button class="btn btn-success" onclick="exportDocumentHtml()" id="export-html-btn">
+                        <i class="fas fa-file-export"></i> 导出HTML
+                    </button>
+                    <button class="btn btn-primary" onclick="reparseDocument()">
+                        <i class="fas fa-sync-alt"></i> 重解析
+                    </button>
+                </div>
+            </div>
+            <div class="detail-container">
+                <div class="detail-col detail-col-thumbs">
+                    <div class="thumbs-header">
+                        <span>页面缩略图</span>
+                    </div>
+                    <div id="thumbs-list" class="thumbs-list"></div>
+                </div>
+                <div class="detail-col detail-col-pdf">
+                    <div class="pdf-header">
+                        <span id="pdf-page-info">第 1 页</span>
+                        <div class="pdf-header-actions">
+                            <button class="btn btn-outline btn-sm" onclick="exportCurrentPageHtml()" title="导出当前页HTML">
+                                <i class="fas fa-file-code"></i> HTML
+                            </button>
+                            <button class="btn btn-outline btn-sm" onclick="exportCurrentPageMarkdown()" title="导出当前页Markdown">
+                                <i class="fas fa-file-alt"></i> MD
+                            </button>
+                            <button class="btn btn-outline btn-sm" onclick="exportCurrentPagePdf()" title="导出当前页PDF">
+                                <i class="fas fa-file-pdf"></i> PDF
+                            </button>
+                        </div>
+                    </div>
+                    <div class="pdf-wrapper">
+                        <div id="pdf-container" class="pdf-container pdf-canvas-container">
+                            <canvas id="pdf-canvas"></canvas>
+                            <div id="annotation-layer" class="annotation-layer"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="detail-col detail-col-elements">
+                    <div class="elements-header">
+                        <span>解析结果</span>
+                        <div class="elements-actions">
+                            <button id="add-element-btn" class="btn btn-success btn-sm" onclick="toggleAddElementMode()">
+                                <i class="fas fa-plus"></i> 添加元素
+                            </button>
+                            <button id="show-raw-btn" class="btn btn-outline btn-sm" onclick="showRawLayoutData()">
+                                <i class="fas fa-database"></i> 原始数据
+                            </button>
+                            <button id="edit-order-btn" class="btn btn-outline btn-sm" onclick="toggleEditOrder()">
+                                <i class="fas fa-sort"></i> 变更排序
+                            </button>
+                            <button id="save-order-btn" class="btn btn-success btn-sm hidden" onclick="saveOrder()">
+                                <i class="fas fa-check"></i> 保存
+                            </button>
+                            <button id="cancel-order-btn" class="btn btn-outline btn-sm hidden" onclick="cancelOrder()">
+                                <i class="fas fa-times"></i> 取消
+                            </button>
+                        </div>
+                    </div>
+                    <div id="elements-list" class="elements-list"></div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <div id="edit-modal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>编辑元素内容</h3>
+                <button class="modal-close" onclick="closeEditModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>元素类型</label>
+                    <select id="edit-type" class="form-control">
+                        <option value="Text">Text</option>
+                        <option value="Title">Title</option>
+                        <option value="Section-header">Section</option>
+                        <option value="List-item">List</option>
+                        <option value="Table">Table</option>
+                        <option value="Picture">Picture</option>
+                        <option value="Formula">Formula</option>
+                        <option value="Caption">Caption</option>
+                        <option value="Footnote">Footnote</option>
+                        <option value="Page-header">Page Header</option>
+                        <option value="Page-footer">Page Footer</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>内容 (Markdown)</label>
+                    <textarea id="edit-content" class="form-control" rows="10"></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" onclick="closeEditModal()">取消</button>
+                <button class="btn btn-primary" onclick="saveElementEdit()">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="add-element-modal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>添加新元素</h3>
+                <button class="modal-close" onclick="closeAddElementModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>元素类型</label>
+                    <select id="add-element-type" class="form-control">
+                        <option value="Text">Text</option>
+                        <option value="Title">Title</option>
+                        <option value="Section-header">Section</option>
+                        <option value="List-item">List</option>
+                        <option value="Table">Table</option>
+                        <option value="Picture">Picture</option>
+                        <option value="Formula">Formula</option>
+                        <option value="Caption">Caption</option>
+                        <option value="Footnote">Footnote</option>
+                        <option value="Page-header">Page Header</option>
+                        <option value="Page-footer">Page Footer</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>框选位置 (JPG像素坐标，与其他解析程序一致)</label>
+                    <div class="bbox-display">
+                        <span id="add-element-bbox">请先在PDF上框选区域</span>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>内容 (Markdown)</label>
+                    <textarea id="add-element-content" class="form-control" rows="8" placeholder="请输入元素内容..."></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" onclick="closeAddElementModal()">取消</button>
+                <button class="btn btn-primary" id="add-element-save-btn" onclick="saveNewElement()" disabled>添加元素</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="raw-data-modal" class="modal hidden">
+        <div class="modal-content modal-wide">
+            <div class="modal-header">
+                <h3>Layout 模型原始检测数据</h3>
+                <button class="modal-close" onclick="closeRawDataModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="raw-data-info">
+                    <span id="raw-data-count"></span>
+                    <button class="btn btn-primary btn-sm" onclick="showLayoutAnnotationImage()">
+                        <i class="fas fa-image"></i> 查看标注图片
+                    </button>
+                </div>
+                <pre id="raw-data-content" class="raw-data-content"></pre>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" onclick="closeRawDataModal()">关闭</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="annotation-image-modal" class="modal hidden">
+        <div class="modal-content modal-extra-wide">
+            <div class="modal-header">
+                <h3>Layout 标注图片</h3>
+                <button class="modal-close" onclick="closeAnnotationImageModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="annotation-legend">
+                    <span class="legend-item"><span class="legend-color" style="background: #dc143c;"></span> Title</span>
+                    <span class="legend-item"><span class="legend-color" style="background: #0000ff;"></span> Section</span>
+                    <span class="legend-item"><span class="legend-color" style="background: #00bfff;"></span> Text</span>
+                    <span class="legend-item"><span class="legend-color" style="background: #008000;"></span> List</span>
+                    <span class="legend-item"><span class="legend-color" style="background: #ff4500;"></span> Table</span>
+                    <span class="legend-item"><span class="legend-color" style="background: #ffd700;"></span> Picture</span>
+                    <span class="legend-item"><span class="legend-color" style="background: #8a2be2;"></span> Formula</span>
+                    <span class="legend-item"><span class="legend-color" style="background: #ffa500;"></span> Caption</span>
+                    <span class="legend-item"><span class="legend-color" style="background: #808080;"></span> Footnote</span>
+                    <span class="legend-item"><span class="legend-color" style="background: #ff00ff;"></span> Header/Footer</span>
+                </div>
+                <div class="annotation-image-container">
+                    <img id="annotation-image" src="" alt="标注图片" style="max-width: 100%; height: auto;">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" onclick="closeAnnotationImageModal()">关闭</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script src="/static/app.js"></script>
+</body>
+</html>
