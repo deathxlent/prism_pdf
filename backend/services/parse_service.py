@@ -12,6 +12,7 @@ from backend.services.order_service import assign_reading_order, assign_reading_
 from backend.services.ocr_service_vl import ocr_region, ocr_formula, ocr_batch, ocr_batch_multi_image
 from backend.services.table_service import extract_table_from_native, extract_table_from_scanned
 from backend.services.picture_service import extract_picture
+from backend.services.scanned_parse_service import parse_scanned_page_full
 
 logger = logging.getLogger(__name__)
 
@@ -101,23 +102,37 @@ async def process_document(doc_id: int):
         pages = await db.get_pages(doc_id)
 
         all_jpg_paths = []
-        for page in pages:
+        non_scanned_indices = []
+        for page_idx, page in enumerate(pages):
             jpg_path = page["jpg_path"]
             all_jpg_paths.append(jpg_path)
+            if not page.get("is_scanned"):
+                non_scanned_indices.append(page_idx)
 
-        set_parse_progress(doc_id, "parsing_layout", 35, "批量检测布局...")
-        logger.info("Batch detecting layouts for all pages...")
-        layouts = await asyncio.to_thread(detect_layout_batch, all_jpg_paths)
+        non_scanned_jpg_paths = [all_jpg_paths[i] for i in non_scanned_indices]
+        logger.info(f"Total pages: {len(pages)}, non-scanned: {len(non_scanned_indices)}, scanned: {len(pages) - len(non_scanned_indices)}")
 
-        set_parse_progress(doc_id, "parsing_layout", 50, "分配阅读顺序...")
-        logger.info("Batch assigning reading orders for all pages...")
-        layouts_with_order = await asyncio.to_thread(
-            assign_reading_order_batch, layouts, all_jpg_paths
-        )
+        layouts_with_order = [[] for _ in range(len(pages))]
+
+        if non_scanned_jpg_paths:
+            set_parse_progress(doc_id, "parsing_layout", 35, f"批量检测布局（{len(non_scanned_indices)} 个非扫描页）...")
+            logger.info("Batch detecting layouts for non-scanned pages...")
+            non_scanned_layouts = await asyncio.to_thread(detect_layout_batch, non_scanned_jpg_paths)
+
+            set_parse_progress(doc_id, "parsing_layout", 50, f"分配阅读顺序（{len(non_scanned_indices)} 个非扫描页）...")
+            logger.info("Batch assigning reading orders for non-scanned pages...")
+            non_scanned_with_order = await asyncio.to_thread(
+                assign_reading_order_batch, non_scanned_layouts, non_scanned_jpg_paths
+            )
+
+            for i, ns_idx in enumerate(non_scanned_indices):
+                layouts_with_order[ns_idx] = non_scanned_with_order[i]
 
         for page_idx, page in enumerate(pages):
             try:
                 page["_elements"] = layouts_with_order[page_idx]
+                if page.get("is_scanned"):
+                    logger.info(f"Page {page['page_number']}: scanned page, will use direct PaddleOCR-VL full-page parse (skip YOLO+Surya)")
             except Exception as e:
                     logger.error(f"Failed to assign reading order for page {page['page_number']}: {e}")
                     page["_elements"] = []
@@ -210,6 +225,82 @@ async def _parse_page(doc_id: int, page_info: dict, doc_dir: str,
 
     output_dir = str(Path(doc_dir) / "output")
     Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+    # ==================== 扫描版 PDF 直接解析分支 ====================
+    # 跳过 YOLO 布局检测 + Surya 阅读顺序 + 逐区域 OCR，
+    # 直接调用 PaddleOCR-VL 1.6 Table Recognition 整页解析
+    if is_scanned and not elements:
+        logger.info(f"Page {page_info['page_number']}: SCANNED PAGE -> using direct PaddleOCR-VL full-page parse")
+        try:
+            from PIL import Image
+            with Image.open(jpg_path) as im:
+                jpg_w, jpg_h = im.size
+
+            scanned_elements = await asyncio.to_thread(
+                parse_scanned_page_full, jpg_path, jpg_w, jpg_h
+            )
+
+            element_count = {
+                "Text": 0, "Section-header": 0, "Title": 0, "Table": 0,
+                "Figure": 0, "Picture": 0, "Formula": 0, "List-item": 0,
+                "Page-header": 0, "Page-footer": 0, "Caption": 0,
+            }
+
+            has_body_content_before_table = False
+
+            for elem in scanned_elements:
+                try:
+                    elem_type = elem["element_type"]
+                    jpg_bbox = elem["bbox"]
+                    pdf_bbox = jpg_bbox_to_pdf_bbox(jpg_bbox, DEFAULT_DPI)
+                    confidence = elem.get("confidence", 0.8)
+                    reading_order = elem.get("reading_order", 0)
+                    content = elem.get("content", "") or ""
+                    content_format = elem.get("content_format", "markdown")
+
+                    if elem_type in TEXT_TYPES:
+                        has_body_content_before_table = True
+                    if elem_type == "Table" and not has_body_content_before_table:
+                        continue
+
+                    table_rows = elem.get("table_rows", 0)
+                    table_cols = elem.get("table_cols", 0)
+                    table_html = content if elem_type == "Table" and content_format == "html" else None
+                    table_plain = _extract_table_plain_text_from_html(content) if table_html else None
+
+                    eid = await db.add_element(page_id, elem_type, pdf_bbox, confidence, reading_order,
+                                               content=content, content_format=content_format,
+                                               table_html=table_html, table_plain=table_plain,
+                                               table_rows=table_rows, table_cols=table_cols)
+
+                    if eid and elem_type in element_count:
+                        element_count[elem_type] += 1
+                        if elem_type == "Table":
+                            current_page_last_table_info = {
+                                "element_id": eid,
+                                "page_number": page_info["page_number"],
+                                "first_row_plain": _get_first_data_row_plain(table_plain),
+                                "last_row_plain": _get_last_data_row_plain(table_plain),
+                                "html": table_html,
+                                "has_caption": False,
+                                "caption_plain": None,
+                            }
+                            last_table_result_idx = len(scanned_elements)
+
+                except Exception as e:
+                    logger.warning(f"Failed to save scanned element [{elem.get('element_type')}]: {e}")
+                    continue
+
+            await db.update_page(page_id, status="content_parsed")
+            pdf_doc.close()
+            logger.info(f"Page {page_info['page_number']}: scanned parse done -> {len(scanned_elements)} elements: {element_count}")
+            return element_count, current_page_last_table_info, current_cross_page_group, last_table_result_idx
+
+        except Exception as e:
+            logger.error(f"Scanned page direct parse FAILED for page {page_info['page_number']}: {e}. Falling back to normal flow.", exc_info=True)
+            # fallback: 后面走正常流程
+
+    # ==================== 正常流程（非扫描版 / 扫描版解析失败 fallback） ====================
 
     page_text = pdf_page.get_text("text")
     garble_result = detect_garbled_text(page_text)
