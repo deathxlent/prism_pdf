@@ -56,33 +56,8 @@ def parse_scanned_page_full(jpg_path: str, page_width: int, page_height: int) ->
     """
     logger.info(f"[Scanned Parse] Full-page Table Recognition for: {Path(jpg_path).name}")
 
-    # Step 1: 调用整页 Table Recognition
-    # 注意: 标准 "Table Recognition:" 提示词效果最好（模型预训练过）
-    # 额外加太多约束会让模型混乱。max_tokens=16384 防止大表格截断
-    try:
-        raw_output = ocr_service._call_llama_server(
-            "Table Recognition:",
-            jpg_path,
-            max_tokens=16384
-        )
-    except Exception as e:
-        logger.error(f"[Scanned Parse] Table Recognition failed: {e}")
-        try:
-            raw_output = ocr_service._call_llama_server("OCR:", jpg_path, max_tokens=8000)
-        except Exception as e2:
-            logger.error(f"[Scanned Parse] OCR fallback also failed: {e2}")
-            return []
-
-    if not raw_output or not raw_output.strip():
-        logger.warning(f"[Scanned Parse] Empty output for {Path(jpg_path).name}")
-        return []
-
-    logger.info(f"[Scanned Parse] Raw output length: {len(raw_output)} chars")
-    logger.debug(f"[Scanned Parse] Raw output preview: {raw_output[:500]}")
-
-    # Step 1b: 补充调用 "OCR:" 拿纯文本，用于：
-    #   (1) 提取页眉（Page-header）、页脚（Page-footer） —— Table Recognition 常忽略
-    #   (2) 补全表格缺失的列 —— 列很多时模型可能截断右侧数字列
+    # Step 1a: 先调用 "OCR:" 拿纯文本（先调用避免被 Table Recognition 缓存截断）
+    # 纯文本用于: (1) 提取页眉页脚 (2) 补全表格缺失的数字列
     plain_ocr_lines = []
     extra_header_content = ""
     extra_footer_content = ""
@@ -92,7 +67,6 @@ def parse_scanned_page_full(jpg_path: str, page_width: int, page_height: int) ->
             plain_ocr_lines = [l.strip() for l in ocr_plain.split('\n') if l.strip()]
 
             # --- 提取页眉 ---
-            # 策略: 前 3 行中找包含公司/文档特征关键词的行
             header_keywords = ['集团', '有限公司', '年度', '票据', '说明书', '公告',
                                '报告', '招股', '募集', '债券', '审计']
             found_header_idx = -1
@@ -102,9 +76,7 @@ def parse_scanned_page_full(jpg_path: str, page_width: int, page_height: int) ->
                     break
 
             if found_header_idx >= 0:
-                # 只取匹配到的那一行，不要包含后续段落
                 header_line = plain_ocr_lines[found_header_idx]
-                # 截断过长内容（页眉不会超过 80 字），防止把后续正文也塞进去
                 if len(header_line) > 80:
                     header_line = header_line[:80]
                 extra_header_content = header_line
@@ -112,13 +84,11 @@ def parse_scanned_page_full(jpg_path: str, page_width: int, page_height: int) ->
                 extra_header_content = plain_ocr_lines[0]
 
             # --- 提取页脚 ---
-            # 策略: 最后 1-3 行中找纯数字页码或短文本
             for i in range(1, min(4, len(plain_ocr_lines)) + 1):
                 last_line = plain_ocr_lines[-i]
                 if re.match(r'^\s*\d+\s*$', last_line) or re.match(r'^\s*-\s*\d+\s*-\s*$', last_line):
                     extra_footer_content = last_line
                     break
-                # 其他短文本（<15字）也可以作为页脚
                 if not extra_footer_content and len(last_line) < 15:
                     extra_footer_content = last_line
 
@@ -129,6 +99,31 @@ def parse_scanned_page_full(jpg_path: str, page_width: int, page_height: int) ->
             )
     except Exception as e:
         logger.warning(f"[Scanned Parse] Supplementary OCR failed (non-critical): {e}")
+
+    # Step 1b: 调用整页 Table Recognition
+    try:
+        raw_output = ocr_service._call_llama_server(
+            "Table Recognition:",
+            jpg_path,
+            max_tokens=16384
+        )
+    except Exception as e:
+        logger.error(f"[Scanned Parse] Table Recognition failed: {e}")
+        if not plain_ocr_lines:
+            try:
+                raw_output = ocr_service._call_llama_server("OCR:", jpg_path, max_tokens=8000)
+            except Exception as e2:
+                logger.error(f"[Scanned Parse] OCR fallback also failed: {e2}")
+                return []
+        else:
+            raw_output = "\n".join(plain_ocr_lines)
+
+    if not raw_output or not raw_output.strip():
+        logger.warning(f"[Scanned Parse] Empty output for {Path(jpg_path).name}")
+        return []
+
+    logger.info(f"[Scanned Parse] Raw output length: {len(raw_output)} chars")
+    logger.debug(f"[Scanned Parse] Raw output preview: {raw_output[:500]}")
 
     # Step 2: 解析结构化行
     rows = _parse_structured_rows(raw_output)
@@ -888,127 +883,227 @@ def _supplement_table_missing_columns(elements: list[dict], plain_ocr_lines: lis
             f"{'...' if len(scoped_ocr_number_matrix) > 8 else ''}"
         )
 
-        # --- Step B (Alternative): 对完全没有浮点数的表格，用上下文标记直接定位 ---
-        # 当 all_table_floats 为空时，数值范围过滤不起作用（因为和毛利率重叠）
-        # 改用: 在 plain_ocr_lines 中找与 context 高度相似的标记行（表X-X、标题等），
-        #       然后从那行向后收集连续的"2列浮点数"
+        # --- Step B (Alternative): 对没有浮点数的表格，用上下文标记 + 数字行扫描 ---
         if len(all_table_floats) == 0 and has_supplement_keyword and n_data_rows >= 3:
-            # 找和 Caption/上下文最相似的行（表X-X 编号、独特关键词）
-            marker_in_context = re.findall(r'(?:表\s*\d+[-_]\d+|公路资产统计表|募集说明书|主要\w+表)', context_text)
+            marker_in_context = re.findall(
+                r'(?:表\s*\d+[-_]\d+|公路资产统计表|募集说明书|主要\w+表|所属干线)',
+                combined_text
+            )
             target_markers = list(dict.fromkeys(marker_in_context))[:3]
 
-            # 额外加: Caption/Text 中前 15 个字的精确子串
-            caption_snippet = context_text[:20].strip()
+            # Caption 前 20 字的子串（去掉空格、全角标点做模糊匹配）
+            def _norm(s):
+                return re.sub(r'[\s：:（）()、,，.。\-—]', '', s)
+
+            caption_norm = _norm(context_text[:25])
 
             logger.info(
                 f"[Scanned Parse] Table #{ei} no floats, use marker search. "
-                f"target_markers={target_markers}, caption='{caption_snippet}...'"
+                f"target_markers={target_markers}, caption_norm='{caption_norm[:15]}...'"
             )
 
             marker_found_line = -1
-            if target_markers or caption_snippet:
-                for li, line in enumerate(plain_ocr_lines):
-                    line_score = 0
-                    for marker in target_markers:
-                        if marker in line:
-                            line_score += 5
-                    if caption_snippet and len(caption_snippet) >= 5:
-                        # 用子串匹配 (取中间 10 个字符)
-                        mid = len(caption_snippet) // 2
-                        probe = caption_snippet[max(0, mid-5):mid+5]
-                        if len(probe) >= 5 and probe in line:
-                            line_score += 3
-                    if line_score >= 3:
-                        marker_found_line = li
-                        break
-
-            # 如果没找到精确标记，退而求其次: 找包含"里程/公里/所属干线"等词的行
-            if marker_found_line < 0:
-                for li, line in enumerate(plain_ocr_lines):
-                    if ('里程' in line or '所属干线' in line or '公路名称' in line or
-                        ('公里' in line and ('表' in line or '统计' in line))):
-                        marker_found_line = li - 1 if li > 0 else 0
-                        break
-
-            if marker_found_line >= 0:
-                # 从标记行向后扫描最多 15 行，收集"每行 1-3 个浮点数且在里程范围"的行
-                collected_rows = []
-                for le in range(marker_found_line, min(marker_found_line + 15, len(plain_ocr_lines))):
-                    nums = re.findall(r'\b\d+\.\d+\b', plain_ocr_lines[le])
-                    if nums:
-                        # 里程范围过滤: 5-300，并且数字数量符合（1-3 个）
-                        nums_in_range = [float(n) for n in nums if 5.0 <= float(n) <= 300.0]
-                        # 关键排除: 如果这行的数字大部分是毛利率范围（且行内有毛利率关键词），跳过
-                        has_gross_margin_keywords = any(k in plain_ocr_lines[le] for k in ['毛利率', '项目', '合计', '2014年', '2015年', '2016年'])
-                        if has_gross_margin_keywords:
-                            continue
-                        if 1 <= len(nums_in_range) <= 3:
-                            collected_rows.append(nums_in_range)
-                            if len(collected_rows) >= n_data_rows:
-                                break
-
-                # 必须收集到 n_data_rows 行，而且每行至少 1 个数字
-                if len(collected_rows) >= n_data_rows:
-                    # 检查每行数字数量是否一致（或接近）
-                    consistent = True
-                    first_len = len(collected_rows[0])
-                    for row in collected_rows[:n_data_rows]:
-                        if abs(len(row) - first_len) >= 2:
-                            consistent = False
+            best_line_score = 0
+            for li, line in enumerate(plain_ocr_lines):
+                line_norm = _norm(line)
+                score = 0
+                for marker in target_markers:
+                    marker_norm = _norm(marker)
+                    if marker_norm and marker_norm in line_norm:
+                        score += 5
+                if caption_norm and len(caption_norm) >= 6:
+                    # 取 caption 中 6-8 字符的滑动窗口做子串匹配
+                    for w_start in range(0, len(caption_norm) - 5, 3):
+                        probe = caption_norm[w_start:w_start + 8]
+                        if len(probe) >= 6 and probe in line_norm:
+                            score += 3
                             break
-                    if consistent and first_len >= 1:
-                        candidate = collected_rows[:n_data_rows]
-                        extra_count = sum(len(r) for r in candidate)
-                        # 满足条件，直接采用
-                        best_matrix = candidate
-                        best_score = 99999
+                # 额外: 里程/公里关键词命中
+                if '里程' in line or ('公里' in line and ('表' in line or '统计' in line)):
+                    score += 2
+                if '所属干线' in line or '公路名称' in line:
+                    score += 3
+                if score > best_line_score and score >= 2:
+                    best_line_score = score
+                    marker_found_line = li
+
+            logger.info(
+                f"[Scanned Parse] Table #{ei} marker_found_line={marker_found_line} "
+                f"(score={best_line_score})"
+            )
+
+            # --- 新策略: 逐行用表格行的关键词在 OCR 中找对应数字行 ---
+            # 因为 OCR 纯文本行顺序是乱的，不能假设先后顺序
+            keyword_match_rows: list[list[float]] = []
+            all_used_ocr_lines: set[int] = set()
+
+            def _norm(s):
+                return re.sub(r'[\s：:（）()、,，.。\-—]', '', s)
+
+            # 收集每个表格数据行的关键词
+            table_row_keywords: list[list[str]] = []
+            for ri in range(data_rows_start, min(data_rows_start + n_data_rows, len(table_2d))):
+                row = table_2d[ri]
+                kws = []
+                for cell in row:
+                    if not cell or not isinstance(cell, str):
+                        continue
+                    # 去掉纯数字、纯标点
+                    c = cell.strip()
+                    if not c or re.match(r'^[\d\.\-%—\-\s]+$', c):
+                        continue
+                    # 找有辨识度的词组（>=2 字，不是"收费还贷"这种重复词）
+                    words = re.findall(r'[\u4e00-\u9fa5A-Za-z0-9]{2,}', c)
+                    for w in words:
+                        if w not in ('收费还贷', '起自', '止于', '公路', '高速'):
+                            kws.append(w)
+                # 去重保序，取前 6 个
+                seen = set()
+                uniq_kws = []
+                for k in kws:
+                    if k not in seen:
+                        seen.add(k)
+                        uniq_kws.append(k)
+                table_row_keywords.append(uniq_kws[:6])
+
+            # 为每个数据行在 OCR 中找匹配行
+            logger.info(
+                f"[Scanned Parse] Table #{ei} keyword matching for {len(table_row_keywords)} data rows"
+            )
+            # 先收集所有含目标数字的 OCR 行，便于 fallback 时按顺序分配
+            all_number_lines: list[tuple[int, list[float]]] = []
+            for li, ocr_line in enumerate(plain_ocr_lines):
+                nums = re.findall(r'\b\d+\.\d+\b', ocr_line)
+                nums_in_range = [float(n) for n in nums if 5.0 <= float(n) <= 300.0]
+                has_neg = any(float(n) < 0 for n in nums)
+                has_gross_margin_keywords = any(
+                    k in ocr_line for k in
+                    ['毛利率', '项目', '合计', '2014年', '2015年', '2016年', '运营毛利率']
+                )
+                if not has_gross_margin_keywords and not has_neg and 1 <= len(nums_in_range) <= 3:
+                    all_number_lines.append((li, nums_in_range))
+
+            matched_nums: list[list | None] = [None] * len(table_row_keywords)
+
+            for ri, kws in enumerate(table_row_keywords):
+                best_kw_li = -1
+                best_kw_score = 0
+                for li, ocr_line in enumerate(plain_ocr_lines):
+                    if li in all_used_ocr_lines:
+                        continue
+                    ocr_norm = _norm(ocr_line)
+                    if not ocr_norm:
+                        continue
+                    score = 0
+                    for kw in kws:
+                        if _norm(kw) in ocr_norm:
+                            score += len(kw)
+                    if score >= 2 and score > best_kw_score:
+                        best_kw_score = score
+                        best_kw_li = li
+
+                if best_kw_li >= 0:
+                    search_range = list(range(
+                        max(0, best_kw_li - 8),
+                        min(len(plain_ocr_lines), best_kw_li + 9)
+                    ))
+                    search_range.sort(key=lambda x: abs(x - best_kw_li))
+                    for li in search_range:
+                        if li in all_used_ocr_lines:
+                            continue
+                        for nli, nrow in all_number_lines:
+                            if nli == li:
+                                matched_nums[ri] = nrow
+                                all_used_ocr_lines.add(li)
+                                logger.info(
+                                    f"[Scanned Parse]   row#{ri} matched OCR line#{li} "
+                                    f"(kw_score={best_kw_score}, nums={nrow}): "
+                                    f"kws={kws[:3]}"
+                                )
+                                break
+                        if matched_nums[ri] is not None:
+                            break
+
+            # --- 对未匹配行: 按顺序分配剩余数字行 ---
+            # 按数字行号从小到大排序，然后依次分配给未匹配的表格行
+            unused_num_lines = [(li, nrow) for li, nrow in all_number_lines if li not in all_used_ocr_lines]
+            unused_num_lines.sort(key=lambda x: x[0])  # 按 OCR 行号从小到大
+
+            for ri in range(len(table_row_keywords)):
+                if matched_nums[ri] is None:
+                    if unused_num_lines:
+                        li, nrow = unused_num_lines.pop(0)
+                        matched_nums[ri] = nrow
+                        all_used_ocr_lines.add(li)
                         logger.info(
-                            f"[Scanned Parse] Table #{ei} marker search succeeded! "
-                            f"Found {len(candidate)} rows x {first_len} cols of numbers. "
-                            f"Sample: {candidate[0]}"
+                            f"[Scanned Parse]   row#{ri} no keyword match, assigned number line#{li} (by order): {nrow}"
                         )
-        allow_no_match = (len(all_table_floats) == 0)  # 完全没浮点数时允许不做数字对齐验证
-        if best_matrix is None:  # marker search 没找到时再走一般搜索
+                    else:
+                        matched_nums[ri] = ['']
+                        logger.info(f"[Scanned Parse]   row#{ri} no keyword match, no numbers left, empty")
+
+            keyword_match_rows = [row if row is not None else [''] for row in matched_nums]
+
+            # 用 keyword_match_rows 作为 collected_rows
+            collected_rows = keyword_match_rows
+            logger.info(f"[Scanned Parse] Table #{ei} keyword match collected_rows={len(collected_rows)} rows")
+
+            # 允许收集到的行数比需要的少（OCR 可能漏掉行），至少 70%
+            min_required = max(2, int(n_data_rows * 0.7))
+            if len(collected_rows) >= min_required:
+                # 如果行数不够，用空字符串填充（不要用重复数据）
+                while len(collected_rows) < n_data_rows:
+                    collected_rows.append([''] * max(1, len(collected_rows[-1]) if collected_rows and collected_rows[-1] else 1))
+
+                consistent = True
+                first_len = len([x for x in collected_rows[0] if not (isinstance(x, str) and x == '')]) or 1
+                for row in collected_rows[:n_data_rows]:
+                    actual_len = len([x for x in row if not (isinstance(x, str) and x == '')])
+                    if actual_len > 0 and abs(actual_len - first_len) >= 2:
+                        consistent = False
+                        break
+                if consistent:
+                    candidate = collected_rows[:n_data_rows]
+                    best_matrix = candidate
+                    best_score = 99999
+                    logger.info(
+                        f"[Scanned Parse] Table #{ei} keyword search succeeded! "
+                        f"Found {len(candidate)} rows. Sample: {candidate[0]}"
+                    )
+        allow_no_match = (len(all_table_floats) == 0)
+        if best_matrix is None:
             for start in range(0, len(scoped_ocr_number_matrix) - n_data_rows + 1):
-            candidate = scoped_ocr_number_matrix[start:start + n_data_rows]
-            extra_count = 0
-            match_count = 0
+                candidate = scoped_ocr_number_matrix[start:start + n_data_rows]
+                extra_count = 0
+                match_count = 0
 
-            for ci, cand_row in enumerate(candidate):
-                table_row = table_floats_per_row[ci] if ci < len(table_floats_per_row) else []
-                extra = len(cand_row) - len(table_row)
-                if len(cand_row) > len(table_row):
-                    extra_count += extra
-                # 即使当前表格没有浮点数，也算 extra（cand_row 本身的数量就是 extra）
-                if len(table_row) == 0 and len(cand_row) > 0:
-                    extra_count += len(cand_row)
+                for ci, cand_row in enumerate(candidate):
+                    table_row = table_floats_per_row[ci] if ci < len(table_floats_per_row) else []
+                    if len(cand_row) > len(table_row):
+                        extra_count += len(cand_row) - len(table_row)
+                    if len(table_row) == 0 and len(cand_row) > 0:
+                        extra_count += len(cand_row)
+                        continue
+                    for tf in table_row:
+                        if any(abs(cf - tf) < 0.01 for cf in cand_row):
+                            match_count += 1
+
+                avg_extra_per_row = extra_count / max(1, n_data_rows)
+                if avg_extra_per_row < 1.0:
                     continue
-                for tf in table_row:
-                    if any(abs(cf - tf) < 0.01 for cf in cand_row):
-                        match_count += 1
+                if not allow_no_match and match_count < 1:
+                    continue
 
-            # 核心匹配条件:
-            #   有现有浮点数的情况: 至少 1 个精确数字匹配（行对齐验证）
-            #   无现有浮点数的情况: 只要 extra > 0（相信关键词+数值范围定位）
-            #   另外: 每行平均至少有 1 个 extra 数字
-            avg_extra_per_row = extra_count / max(1, n_data_rows)
-            if avg_extra_per_row < 1.0:
-                continue
-            if not allow_no_match and match_count < 1:
-                continue
+                actual_new = max(len(r) for r in candidate)
+                if all_table_floats:
+                    actual_new = max(0, actual_new - max(len(r) for r in table_floats_per_row))
+                if actual_new > MAX_SUPPLEMENT_COLS:
+                    continue
 
-            # 限制: 补充列不能超过 MAX_SUPPLEMENT_COLS
-            actual_new = max(len(r) for r in candidate)
-            if all_table_floats:
-                actual_new = max(0, actual_new - max(len(r) for r in table_floats_per_row))
-            if actual_new > MAX_SUPPLEMENT_COLS:
-                continue
-
-            # 评分: 数字匹配 > 额外列数 > 候选长度
-            score = match_count * 100 + extra_count * 10 + n_data_rows
-            if score > best_score:
-                best_score = score
-                best_matrix = candidate
+                score = match_count * 100 + extra_count * 10 + n_data_rows
+                if score > best_score:
+                    best_score = score
+                    best_matrix = candidate
 
         if best_matrix is None:
             new_elements.append(elem)
@@ -1036,14 +1131,30 @@ def _supplement_table_missing_columns(elements: list[dict], plain_ocr_lines: lis
         # --- 确定列名（如果表头有空列名，就从 OCR 附近的行猜）---
         extra_header_names = []
         if has_header:
-            # 在 plain_ocr_lines 中找表格前面的表头行
+            # 找真实表头行：包含多个列名关键词（不是"单位"行）
             header_line = None
-            for line in plain_ocr_lines:
-                if any(kw in line for kw in ['里程', '金额', '长度', '数量', '公里', '万元']):
+            best_hdr_score = 0
+            for li, line in enumerate(plain_ocr_lines):
+                score = 0
+                if '所属干线' in line or '公路名称' in line or '项目' in line:
+                    score += 5
+                if '通车里程' in line:
+                    score += 3
+                if '收费里程' in line:
+                    score += 3
+                if '里程' in line:
+                    score += 1
+                if '金额' in line or '万元' in line:
+                    score += 2
+                # 降权："单位"行通常不是表头
+                if '单位' in line:
+                    score -= 2
+                if score > best_hdr_score and score >= 3:
+                    best_hdr_score = score
                     header_line = line
-                    break
 
             if header_line:
+                logger.info(f"[Scanned Parse] Table #{ei} guessed header line: '{header_line[:60]}...'")
                 # 从表头行里找特征关键词
                 if '收费里程' in header_line and '通车' in header_line:
                     extra_header_names = ['通车里程', '收费里程']
@@ -1053,10 +1164,17 @@ def _supplement_table_missing_columns(elements: list[dict], plain_ocr_lines: lis
                     extra_header_names = ['收费里程']
                 else:
                     found_names = re.findall(
-                        r'[^\s\d]{1,8}?(?:里程|金额|长度|数量|公里|万元|面积)',
+                        r'[^\s\d]{1,10}?(?:里程|金额|长度|数量|公里|万元|面积|数量)',
                         header_line
                     )
-                    extra_header_names = found_names[-n_new_cols:] if found_names else []
+                    # 去重保持顺序
+                    seen = set()
+                    uniq = []
+                    for n in found_names:
+                        if n not in seen:
+                            seen.add(n)
+                            uniq.append(n)
+                    extra_header_names = uniq[-n_new_cols:] if uniq else []
 
         # 如果没猜到列名，用默认名
         while len(extra_header_names) < actual_n_new_cols:
@@ -1086,7 +1204,13 @@ def _supplement_table_missing_columns(elements: list[dict], plain_ocr_lines: lis
 
                     added_count = 0
                     for num in num_row:
-                        num_str = f"{num:.2f}"
+                        # 允许空字符串（OCR 漏行时的占位）
+                        if isinstance(num, str) and num == '':
+                            if added_count < actual_n_new_cols:
+                                new_row.append('')
+                                added_count += 1
+                            continue
+                        num_str = f"{float(num):.2f}"
                         # 如果当前行已经有这个数字且还没加过任何新列，跳过
                         # (避免把已有的通车里程再加一遍)
                         if num_str in existing_floats and added_count == 0:
