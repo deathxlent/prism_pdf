@@ -932,25 +932,31 @@ def _supplement_table_missing_columns(elements: list[dict], plain_ocr_lines: lis
                 f"(score={best_line_score})"
             )
 
-            # --- 新策略: 逐行用表格行的关键词在 OCR 中找对应数字行 ---
-            # 因为 OCR 纯文本行顺序是乱的，不能假设先后顺序
-            keyword_match_rows: list[list[float]] = []
-            all_used_ocr_lines: set[int] = set()
+            # --- 新策略: 优先用"收费年限"（年份范围）精确匹配，其次用关键词 ---
+            # 年份范围（如 2005-2035）是每行唯一的标识符，匹配最可靠
+            year_range_pat = re.compile(r'(20\d{2})\s*[-–—]\s*(20\d{2})')
 
             def _norm(s):
                 return re.sub(r'[\s：:（）()、,，.。\-—]', '', s)
 
-            # 收集每个表格数据行的关键词
-            table_row_keywords: list[list[str]] = []
+            # 收集每个表格数据行的信息: (年份范围, 关键词列表)
+            table_row_info: list[tuple[str | None, list[str]]] = []
             for ri in range(data_rows_start, min(data_rows_start + n_data_rows, len(table_2d))):
                 row = table_2d[ri]
                 kws = []
+                year_range: str | None = None
                 for cell in row:
                     if not cell or not isinstance(cell, str):
                         continue
-                    # 去掉纯数字、纯标点
                     c = cell.strip()
-                    if not c or re.match(r'^[\d\.\-%—\-\s]+$', c):
+                    if not c:
+                        continue
+                    # 先找年份范围（收费年限）
+                    m = year_range_pat.search(c)
+                    if m:
+                        year_range = f"{m.group(1)}-{m.group(2)}"
+                    # 去掉纯数字、纯标点
+                    if re.match(r'^[\d\.\-%—\-\s]+$', c):
                         continue
                     # 找有辨识度的词组（>=2 字，不是"收费还贷"这种重复词）
                     words = re.findall(r'[\u4e00-\u9fa5A-Za-z0-9]{2,}', c)
@@ -964,14 +970,10 @@ def _supplement_table_missing_columns(elements: list[dict], plain_ocr_lines: lis
                     if k not in seen:
                         seen.add(k)
                         uniq_kws.append(k)
-                table_row_keywords.append(uniq_kws[:6])
+                table_row_info.append((year_range, uniq_kws[:6]))
 
-            # 为每个数据行在 OCR 中找匹配行
-            logger.info(
-                f"[Scanned Parse] Table #{ei} keyword matching for {len(table_row_keywords)} data rows"
-            )
-            # 先收集所有含目标数字的 OCR 行，便于 fallback 时按顺序分配
-            all_number_lines: list[tuple[int, list[float]]] = []
+            # 收集所有 OCR 数字行及其年份范围
+            all_number_lines: list[dict] = []
             for li, ocr_line in enumerate(plain_ocr_lines):
                 nums = re.findall(r'\b\d+\.\d+\b', ocr_line)
                 nums_in_range = [float(n) for n in nums if 5.0 <= float(n) <= 300.0]
@@ -980,17 +982,51 @@ def _supplement_table_missing_columns(elements: list[dict], plain_ocr_lines: lis
                     k in ocr_line for k in
                     ['毛利率', '项目', '合计', '2014年', '2015年', '2016年', '运营毛利率']
                 )
-                if not has_gross_margin_keywords and not has_neg and 1 <= len(nums_in_range) <= 3:
-                    all_number_lines.append((li, nums_in_range))
+                if has_gross_margin_keywords or has_neg or not (1 <= len(nums_in_range) <= 3):
+                    continue
+                # 提取这行的所有年份范围（一行可能有多个，如 OCR 合并行）
+                years_in_line = []
+                for m in year_range_pat.finditer(ocr_line):
+                    years_in_line.append(f"{m.group(1)}-{m.group(2)}")
+                all_number_lines.append({
+                    'li': li,
+                    'nums': nums_in_range,
+                    'years': years_in_line,
+                    'line': ocr_line,
+                    'used': False
+                })
 
-            matched_nums: list[list | None] = [None] * len(table_row_keywords)
+            logger.info(
+                f"[Scanned Parse] Table #{ei} matching {len(table_row_info)} data rows "
+                f"to {len(all_number_lines)} OCR number lines"
+            )
 
-            for ri, kws in enumerate(table_row_keywords):
+            matched_nums: list[list | None] = [None] * len(table_row_info)
+
+            # ---- 第一阶段: 用年份范围精确匹配 ----
+            for ri, (year_range, kws) in enumerate(table_row_info):
+                if not year_range:
+                    continue
+                # 找包含这个年份范围的 OCR 数字行
+                for nl in all_number_lines:
+                    if nl['used']:
+                        continue
+                    if year_range in nl['years']:
+                        matched_nums[ri] = nl['nums']
+                        nl['used'] = True
+                        logger.info(
+                            f"[Scanned Parse]   row#{ri} year match: {year_range} "
+                            f"-> OCR#{nl['li']}: nums={nl['nums']}"
+                        )
+                        break
+
+            # ---- 第二阶段: 用关键词匹配未匹配的行 ----
+            for ri, (year_range, kws) in enumerate(table_row_info):
+                if matched_nums[ri] is not None:
+                    continue
                 best_kw_li = -1
                 best_kw_score = 0
                 for li, ocr_line in enumerate(plain_ocr_lines):
-                    if li in all_used_ocr_lines:
-                        continue
                     ocr_norm = _norm(ocr_line)
                     if not ocr_norm:
                         continue
@@ -1003,44 +1039,43 @@ def _supplement_table_missing_columns(elements: list[dict], plain_ocr_lines: lis
                         best_kw_li = li
 
                 if best_kw_li >= 0:
+                    # 在关键词命中行前后 8 行找最近的未使用数字行
                     search_range = list(range(
                         max(0, best_kw_li - 8),
                         min(len(plain_ocr_lines), best_kw_li + 9)
                     ))
                     search_range.sort(key=lambda x: abs(x - best_kw_li))
                     for li in search_range:
-                        if li in all_used_ocr_lines:
-                            continue
-                        for nli, nrow in all_number_lines:
-                            if nli == li:
-                                matched_nums[ri] = nrow
-                                all_used_ocr_lines.add(li)
+                        for nl in all_number_lines:
+                            if nl['used']:
+                                continue
+                            if nl['li'] == li:
+                                matched_nums[ri] = nl['nums']
+                                nl['used'] = True
                                 logger.info(
-                                    f"[Scanned Parse]   row#{ri} matched OCR line#{li} "
-                                    f"(kw_score={best_kw_score}, nums={nrow}): "
-                                    f"kws={kws[:3]}"
+                                    f"[Scanned Parse]   row#{ri} keyword match: "
+                                    f"kws={kws[:3]} -> OCR#{li}: nums={nl['nums']}"
                                 )
                                 break
                         if matched_nums[ri] is not None:
                             break
 
-            # --- 对未匹配行: 按顺序分配剩余数字行 ---
-            # 按数字行号从小到大排序，然后依次分配给未匹配的表格行
-            unused_num_lines = [(li, nrow) for li, nrow in all_number_lines if li not in all_used_ocr_lines]
-            unused_num_lines.sort(key=lambda x: x[0])  # 按 OCR 行号从小到大
+            # ---- 第三阶段: 剩余未匹配行按顺序分配剩余数字行 ----
+            unused_num_lines = [nl for nl in all_number_lines if not nl['used']]
+            unused_num_lines.sort(key=lambda x: x['li'])  # 按 OCR 行号从小到大
 
-            for ri in range(len(table_row_keywords)):
+            for ri in range(len(table_row_info)):
                 if matched_nums[ri] is None:
                     if unused_num_lines:
-                        li, nrow = unused_num_lines.pop(0)
-                        matched_nums[ri] = nrow
-                        all_used_ocr_lines.add(li)
+                        nl = unused_num_lines.pop(0)
+                        matched_nums[ri] = nl['nums']
+                        nl['used'] = True
                         logger.info(
-                            f"[Scanned Parse]   row#{ri} no keyword match, assigned number line#{li} (by order): {nrow}"
+                            f"[Scanned Parse]   row#{ri} fallback: assigned OCR#{nl['li']} (by order): {nl['nums']}"
                         )
                     else:
                         matched_nums[ri] = ['']
-                        logger.info(f"[Scanned Parse]   row#{ri} no keyword match, no numbers left, empty")
+                        logger.info(f"[Scanned Parse]   row#{ri} fallback: no numbers left, empty")
 
             keyword_match_rows = [row if row is not None else [''] for row in matched_nums]
 
