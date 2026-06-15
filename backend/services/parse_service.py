@@ -54,6 +54,46 @@ def _get_last_data_row_plain(table_plain: str) -> list:
     return [c.strip() for c in last_line.split() if c.strip()]
 
 
+def _save_ocr_raw_output(jpg_path: str, page_number: int, doc_dir: str):
+    try:
+        import json
+        from datetime import datetime
+        ocr_raw_dir = Path(doc_dir) / "ocr_raw_output"
+        ocr_raw_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_file = ocr_raw_dir / f"page_{page_number}_{timestamp}.txt"
+
+        log_content = []
+        log_content.append(f"=== OCR Raw Output for Page {page_number} ===")
+        log_content.append(f"Timestamp: {datetime.now().isoformat()}")
+        log_content.append(f"Image Path: {jpg_path}")
+        log_content.append("")
+
+        try:
+            from backend.services.ocr_service_vl import _get_last_raw_response
+            raw_response = _get_last_raw_response()
+            if raw_response:
+                log_content.append("--- Llama Server Raw Response ---")
+                if isinstance(raw_response, (dict, list)):
+                    log_content.append(json.dumps(raw_response, ensure_ascii=False, indent=2))
+                else:
+                    log_content.append(str(raw_response))
+            else:
+                log_content.append("(No raw response captured)")
+        except Exception as e:
+            log_content.append(f"(Failed to get raw response: {e})")
+
+        log_content.append("")
+        log_content.append("=== END ===")
+
+        with open(log_file, "w", encoding="utf-8") as f:
+            f.write("\n".join(log_content))
+
+        logger.info(f"OCR raw output saved to: {log_file}")
+    except Exception as e:
+        logger.warning(f"Failed to save OCR raw output for page {page_number}: {e}")
+
+
 def set_parse_progress(doc_id: int, stage: str, percent: float, message: str = ""):
     _parse_progress[doc_id] = {
         "stage": stage,
@@ -268,6 +308,8 @@ async def _parse_page(doc_id: int, page_info: dict, doc_dir: str,
             with Image.open(jpg_path) as im:
                 jpg_w, jpg_h = im.size
 
+            _save_ocr_raw_output(jpg_path, page_info["page_number"], doc_dir)
+
             scanned_elements = await asyncio.to_thread(
                 parse_scanned_page_full, jpg_path, jpg_w, jpg_h
             )
@@ -278,27 +320,22 @@ async def _parse_page(doc_id: int, page_info: dict, doc_dir: str,
                 "Page-header": 0, "Page-footer": 0, "Caption": 0,
             }
 
-            has_body_content_before_table = False
-
             for elem in scanned_elements:
                 try:
-                    elem_type = elem["element_type"]
-                    jpg_bbox = elem["bbox"]
+                    elem_type = elem.get("element_type", "Text")
+                    jpg_bbox = elem.get("bbox", (0, 0, 0, 0))
                     pdf_bbox = jpg_bbox_to_pdf_bbox(jpg_bbox, DEFAULT_DPI)
                     confidence = elem.get("confidence", 0.8)
                     reading_order = elem.get("reading_order", 0)
                     content = elem.get("content", "") or ""
                     content_format = elem.get("content_format", "markdown")
 
-                    if elem_type in TEXT_TYPES:
-                        has_body_content_before_table = True
-                    if elem_type == "Table" and not has_body_content_before_table:
-                        continue
-
                     table_rows = elem.get("table_rows", 0)
                     table_cols = elem.get("table_cols", 0)
                     table_html = content if elem_type == "Table" and content_format == "html" else None
-                    table_plain = _extract_table_plain_text_from_html(content) if table_html else None
+                    table_plain = None
+                    if table_html:
+                        table_plain = _extract_table_plain_text_from_html(content)
 
                     eid = await db.create_element(page_id, elem_type, pdf_bbox, confidence, reading_order,
                                                   content=content, content_format=content_format)
@@ -318,13 +355,13 @@ async def _parse_page(doc_id: int, page_info: dict, doc_dir: str,
                             last_table_result_idx = len(scanned_elements)
 
                 except Exception as e:
-                    logger.warning(f"Failed to save scanned element [{elem.get('element_type')}]: {e}")
+                    logger.warning(f"Failed to save scanned element [{elem.get('element_type')}]: {e}", exc_info=True)
                     continue
 
             await db.update_page(page_id, status="completed")
             pdf_doc.close()
             logger.info(f"Page {page_info['page_number']}: scanned parse done -> {len(scanned_elements)} elements: {element_count}")
-            return current_page_last_table_info, cross_page_group_counter
+            return (current_page_last_table_info, cross_page_group_counter)
 
         except Exception as e:
             logger.error(f"Scanned page direct parse FAILED for page {page_info['page_number']}: {e}. Falling back to normal flow.", exc_info=True)

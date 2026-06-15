@@ -14,6 +14,17 @@ LLAMA_SERVER_URL = "http://127.0.0.1:8080"
 LLAMA_MODEL_NAME = "PaddleOCR-VL-1.6.Q4_K_M.gguf"
 DEFAULT_TIMEOUT = 180
 
+_last_raw_response = None
+
+
+def _get_last_raw_response():
+    return _last_raw_response
+
+
+def _set_last_raw_response(response):
+    global _last_raw_response
+    _last_raw_response = response
+
 
 def _encode_image(image_path: str) -> str:
     with open(image_path, "rb") as f:
@@ -46,6 +57,8 @@ def _call_llama_server(prompt: str, image_path: str, max_tokens: int = 800) -> s
     req = urllib.request.Request(url, data=data, headers=headers, method='POST')
     with urllib.request.urlopen(req, timeout=DEFAULT_TIMEOUT) as resp:
         result = json.loads(resp.read().decode('utf-8'))
+
+    _set_last_raw_response(result)
 
     if 'choices' in result and len(result['choices']) > 0:
         return result['choices'][0]['message']['content']

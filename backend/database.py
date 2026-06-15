@@ -238,3 +238,8 @@ async def get_element(element_id: int) -> dict | None:
         cursor = await db.execute("SELECT * FROM page_elements WHERE id = ?", (element_id,))
         row = await cursor.fetchone()
         return dict(row) if row else None
+
+
+add_element = create_element
+add_page = create_page
+add_document = create_document
