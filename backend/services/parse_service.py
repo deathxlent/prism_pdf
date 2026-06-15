@@ -701,24 +701,32 @@ async def _parse_page(doc_id: int, page_info: dict, doc_dir: str,
                                         content = merged_curr_html
                                         logger.info(f"Page {page_info['page_number']}: 已更新当前页表格HTML（合并空单元格）")
                     
-                    # 强制不识别表头：将第一行 <th> 替换为 <td>
+                    # 强制不识别表头：将第一行所有 <th> 替换为 <td>
                     if force_no_header_for_this_table and table_html:
-                        modified_html = re.sub(
-                            r'(<tr[^>]*>\s*)<th\b([^>]*)>',
-                            r'\1<td\2>',
+                        first_tr_match = re.search(
+                            r'(<tr[^>]*>)(.*?)(</tr>)',
                             table_html,
-                            count=table_cols if table_cols > 0 else 100,
-                            flags=re.IGNORECASE
+                            re.DOTALL | re.IGNORECASE
                         )
-                        modified_html = re.sub(
-                            r'</th>\s*</tr>',
-                            r'</td></tr>',
-                            modified_html,
-                            count=1,
-                            flags=re.IGNORECASE
-                        )
-                        table_html = modified_html
-                        content = modified_html
+                        if first_tr_match:
+                            tr_open = first_tr_match.group(1)
+                            tr_content = first_tr_match.group(2)
+                            tr_close = first_tr_match.group(3)
+                            modified_content = re.sub(
+                                r'<th\b', '<td', tr_content,
+                                flags=re.IGNORECASE
+                            )
+                            modified_content = re.sub(
+                                r'</th>', '</td>', modified_content,
+                                flags=re.IGNORECASE
+                            )
+                            modified_html = (
+                                table_html[:first_tr_match.start()]
+                                + tr_open + modified_content + tr_close
+                                + table_html[first_tr_match.end():]
+                            )
+                            table_html = modified_html
+                            content = modified_html
 
                     # 追溯更新前一页表格的 HTML（如果有跨页合并）
                     if updated_prev_table_html and prev_page_table_info.get("element_id"):
@@ -966,6 +974,31 @@ async def _parse_page(doc_id: int, page_info: dict, doc_dir: str,
                 
                 if elem_idx in table_results:
                     result = table_results[elem_idx]
+                    if force_ocr and force_no_header and result.get("html"):
+                        first_tr_match = re.search(
+                            r'(<tr[^>]*>)(.*?)(</tr>)',
+                            result["html"],
+                            re.DOTALL | re.IGNORECASE
+                        )
+                        if first_tr_match:
+                            tr_open = first_tr_match.group(1)
+                            tr_content = first_tr_match.group(2)
+                            tr_close = first_tr_match.group(3)
+                            modified_content = re.sub(
+                                r'<th\b', '<td', tr_content,
+                                flags=re.IGNORECASE
+                            )
+                            modified_content = re.sub(
+                                r'</th>', '</td>', modified_content,
+                                flags=re.IGNORECASE
+                            )
+                            modified_html = (
+                                result["html"][:first_tr_match.start()]
+                                + tr_open + modified_content + tr_close
+                                + result["html"][first_tr_match.end():]
+                            )
+                            result = dict(result)
+                            result["html"] = modified_html
                 else:
                     result = await asyncio.to_thread(
                         extract_table_from_native, pdf_page, bbox, 
