@@ -299,10 +299,11 @@ async def _parse_page(doc_id: int, page_info: dict, doc_dir: str,
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     # ==================== 扫描版 PDF 直接解析分支 ====================
-    # 跳过 YOLO 布局检测 + Surya 阅读顺序 + 逐区域 OCR，
-    # 直接调用 PaddleOCR-VL 1.6 Table Recognition 整页解析
+    # 先做 YOLO layout 提取 Picture/Figure (logo 等)，
+    # 再调用 PaddleOCR-VL 1.6 Table Recognition 整页解析文本/表格，
+    # 最后按坐标合并两部分结果
     if is_scanned and not elements:
-        logger.info(f"Page {page_info['page_number']}: SCANNED PAGE -> using direct PaddleOCR-VL full-page parse")
+        logger.info(f"Page {page_info['page_number']}: SCANNED PAGE -> using YOLO layout + PaddleOCR-VL full-page parse")
         try:
             from PIL import Image
             with Image.open(jpg_path) as im:
@@ -310,9 +311,45 @@ async def _parse_page(doc_id: int, page_info: dict, doc_dir: str,
 
             _save_ocr_raw_output(jpg_path, page_info["page_number"], doc_dir)
 
+            # Step A: 先做 YOLO layout，专门提取 Picture/Figure (logo 等 OCR 不识别的元素)
+            picture_elements = []
+            try:
+                from backend.services.layout_service import detect_layout
+                raw_layout = await asyncio.to_thread(detect_layout, jpg_path)
+                for le in raw_layout:
+                    if le["element_type"] in ("Picture", "Figure"):
+                        elem_bbox = le["bbox"]
+                        elem_area = (elem_bbox[2] - elem_bbox[0]) * (elem_bbox[3] - elem_bbox[1])
+                        page_area = jpg_w * jpg_h
+                        # 过滤掉过大的 Picture (可能是误检的整页背景)
+                        if elem_area < page_area * 0.5:
+                            picture_elements.append({
+                                "element_type": le["element_type"],
+                                "bbox": elem_bbox,
+                                "confidence": le["confidence"],
+                                "reading_order": 0,
+                                "content": "",
+                                "content_format": "image_path",
+                                "_is_layout_picture": True,
+                            })
+                logger.info(f"Page {page_info['page_number']}: YOLO layout found {len(picture_elements)} Picture/Figure elements")
+            except Exception as layout_e:
+                logger.warning(f"Page {page_info['page_number']}: YOLO layout failed (non-critical): {layout_e}")
+
+            # Step B: 调用 PaddleOCR-VL 整页解析文本/表格
             scanned_elements = await asyncio.to_thread(
                 parse_scanned_page_full, jpg_path, jpg_w, jpg_h
             )
+
+            # Step C: 合并 Picture/Figure 和 OCR 解析结果，按 bbox 坐标排序
+            all_elements = picture_elements + scanned_elements
+            # 阅读顺序: 先按 y0 排，再按 x0 排
+            all_elements.sort(key=lambda e: (
+                e["bbox"][1] / (jpg_h * 0.05),  # y 方向 5% 容差内视为同一行
+                e["bbox"][0]
+            ))
+            for i, elem in enumerate(all_elements):
+                elem["reading_order"] = i
 
             element_count = {
                 "Text": 0, "Section-header": 0, "Title": 0, "Table": 0,
@@ -320,15 +357,58 @@ async def _parse_page(doc_id: int, page_info: dict, doc_dir: str,
                 "Page-header": 0, "Page-footer": 0, "Caption": 0,
             }
 
-            for elem in scanned_elements:
+            # 跨页表格判断辅助: 统计表格之前是否有"有效主体内容"
+            # 跳过: Page-header / Page-footer / 角落的小Picture(logo) / Caption
+            NON_BODY_TYPES = {"Page-header", "Page-footer", "Caption"}
+            def _is_corner_logo(elem_type, bbox, w, h):
+                if elem_type not in ("Picture", "Figure"):
+                    return False
+                x0, y0, x1, y1 = bbox
+                bw, bh = x1 - x0, y1 - y0
+                # 四个角落 15% 区域内的小图片
+                corner_region_w = w * 0.25
+                corner_region_h = h * 0.20
+                max_size = max(w, h) * 0.20
+                if bw > max_size or bh > max_size:
+                    return False
+                in_top = y1 < corner_region_h
+                in_bottom = y0 > h - corner_region_h
+                in_left = x1 < corner_region_w
+                in_right = x0 > w - corner_region_w
+                return (in_top or in_bottom) and (in_left or in_right)
+
+            has_body_content_before_first_table = False
+            first_table_elem_idx = None
+            saved_element_ids = []
+
+            for elem_idx, elem in enumerate(all_elements):
                 try:
                     elem_type = elem.get("element_type", "Text")
-                    jpg_bbox = elem.get("bbox", (0, 0, 0, 0))
-                    pdf_bbox = jpg_bbox_to_pdf_bbox(jpg_bbox, DEFAULT_DPI)
+                    bbox = elem.get("bbox", (0, 0, 0, 0))
                     confidence = elem.get("confidence", 0.8)
                     reading_order = elem.get("reading_order", 0)
                     content = elem.get("content", "") or ""
                     content_format = elem.get("content_format", "markdown")
+                    is_layout_picture = elem.get("_is_layout_picture", False)
+
+                    # 如果是 layout 检测到的 Picture，需要从 PDF 中裁剪图片
+                    if is_layout_picture and elem_type in ("Picture", "Figure"):
+                        try:
+                            result = await asyncio.to_thread(
+                                extract_picture, pdf_page, bbox, output_dir, page_id * 10000 + reading_order
+                            )
+                            content = result.get("image_path", "")
+                            content_format = "image_path"
+                        except Exception as pic_e:
+                            logger.warning(f"Failed to extract picture at {bbox}: {pic_e}")
+
+                    # 跨页表格判断: 统计表格前的有效主体内容
+                    if elem_type == "Table" and first_table_elem_idx is None:
+                        first_table_elem_idx = elem_idx
+                    if first_table_elem_idx is None:
+                        if elem_type not in NON_BODY_TYPES and not _is_corner_logo(elem_type, bbox, jpg_w, jpg_h):
+                            if elem_type not in ("Picture", "Figure") or not _is_corner_logo(elem_type, bbox, jpg_w, jpg_h):
+                                has_body_content_before_first_table = True
 
                     table_rows = elem.get("table_rows", 0)
                     table_cols = elem.get("table_cols", 0)
@@ -337,8 +417,38 @@ async def _parse_page(doc_id: int, page_info: dict, doc_dir: str,
                     if table_html:
                         table_plain = _extract_table_plain_text_from_html(content)
 
-                    eid = await db.create_element(page_id, elem_type, pdf_bbox, confidence, reading_order,
-                                                  content=content, content_format=content_format)
+                    # ========== 跨页表格接续判断 (针对扫描版) ==========
+                    force_no_header_for_this_table = False
+                    elem_cross_page_group = None
+                    need_retroactive_update = False
+                    if elem_type == "Table" and prev_page_table_info is not None:
+                        prev_at_page_bottom = prev_page_table_info.get("at_page_bottom", True)
+                        is_at_page_top = (bbox[1] < jpg_h * 0.3)
+                        if (table_cols > 0 and prev_page_table_info.get("col_count", 0) > 0
+                                and is_at_page_top and prev_at_page_bottom
+                                and not has_body_content_before_first_table):
+                            if abs(table_cols - prev_page_table_info["col_count"]) <= 1:
+                                logger.info(f"Page {page_info['page_number']}: 扫描版检测到跨页接续表格 "
+                                            f"(cols={table_cols}, prev={prev_page_table_info['col_count']})，强制不识别表头")
+                                force_no_header_for_this_table = True
+                                if prev_page_table_info.get("cross_page_group") is not None:
+                                    elem_cross_page_group = prev_page_table_info["cross_page_group"]
+                                else:
+                                    cross_page_group_counter += 1
+                                    elem_cross_page_group = cross_page_group_counter
+                                    need_retroactive_update = True
+
+                    eid = await db.create_element(page_id, elem_type, bbox, confidence, reading_order,
+                                                  content=content, content_format=content_format,
+                                                  cross_page_group=elem_cross_page_group)
+                    saved_element_ids.append(eid)
+
+                    # 追溯更新前一页表格的 cross_page_group
+                    if need_retroactive_update and eid and prev_page_table_info and prev_page_table_info.get("element_id"):
+                        await db.update_element_cross_page_group(
+                            prev_page_table_info["element_id"], elem_cross_page_group
+                        )
+                        prev_page_table_info["cross_page_group"] = elem_cross_page_group
 
                     if eid and elem_type in element_count:
                         element_count[elem_type] += 1
@@ -348,19 +458,20 @@ async def _parse_page(doc_id: int, page_info: dict, doc_dir: str,
                                 "col_count": table_cols,
                                 "last_row": _get_last_data_row_plain(table_plain),
                                 "page_number": page_info["page_number"],
-                                "cross_page_group": None,
-                                "bbox_y1": jpg_bbox[3],
-                                "at_page_bottom": jpg_bbox[3] > jpg_h * 0.7,
+                                "cross_page_group": elem_cross_page_group,
+                                "bbox_y1": bbox[3],
+                                "at_page_bottom": bbox[3] > jpg_h * 0.7,
                             }
-                            last_table_result_idx = len(scanned_elements)
+                            last_table_result_idx = len(saved_element_ids)
 
                 except Exception as e:
                     logger.warning(f"Failed to save scanned element [{elem.get('element_type')}]: {e}", exc_info=True)
+                    saved_element_ids.append(None)
                     continue
 
             await db.update_page(page_id, status="completed")
             pdf_doc.close()
-            logger.info(f"Page {page_info['page_number']}: scanned parse done -> {len(scanned_elements)} elements: {element_count}")
+            logger.info(f"Page {page_info['page_number']}: scanned parse done -> {len(all_elements)} elements: {element_count}")
             return (current_page_last_table_info, cross_page_group_counter)
 
         except Exception as e:
@@ -427,6 +538,27 @@ async def _parse_page(doc_id: int, page_info: dict, doc_dir: str,
     element_contents = {}
     has_body_content_before_table = False
 
+    # 跨页表格判断辅助: 判断是否是角落的小logo(会被过滤掉不影响表格接续判断)
+    _NON_BODY_FOR_TABLE_CONT = {"Page-header", "Page-footer", "Caption", "Footnote"}
+    def _is_corner_logo_for_normal(elem_type, bbox, w, h):
+        if elem_type not in ("Picture", "Figure"):
+            return False
+        x0, y0, x1, y1 = bbox
+        bw, bh = x1 - x0, y1 - y0
+        corner_region_w = w * 0.25
+        corner_region_h = h * 0.20
+        max_size = max(w, h) * 0.20
+        if bw > max_size or bh > max_size:
+            return False
+        in_top = y1 < corner_region_h
+        in_bottom = y0 > h - corner_region_h
+        in_left = x1 < corner_region_w
+        in_right = x0 > w - corner_region_w
+        return (in_top or in_bottom) and (in_left or in_right)
+
+    _jpg_w = page_info.get("jpg_width", 1)
+    _jpg_h = page_info.get("jpg_height", 1)
+
     for elem_idx, elem in enumerate(elements):
         elem_type = elem["element_type"]
         bbox = elem["bbox"]
@@ -435,8 +567,15 @@ async def _parse_page(doc_id: int, page_info: dict, doc_dir: str,
         content = ""
         content_format = "markdown"
 
-        if elem_type in ("Text", "Section-header", "List-item"):
-            has_body_content_before_table = True
+        # 跨页表格接续判断: 过滤掉 header/footer/caption 和角落的logo，不视为"有效主体内容"
+        if not has_body_content_before_table:
+            is_body_for_table = True
+            if elem_type in _NON_BODY_FOR_TABLE_CONT:
+                is_body_for_table = False
+            elif elem_type in ("Picture", "Figure") and _is_corner_logo_for_normal(elem_type, bbox, _jpg_w, _jpg_h):
+                is_body_for_table = False
+            if is_body_for_table:
+                has_body_content_before_table = True
 
         try:
             if elem_type in TEXT_TYPES:
@@ -453,7 +592,7 @@ async def _parse_page(doc_id: int, page_info: dict, doc_dir: str,
                     content = await asyncio.to_thread(ocr_formula, jpg_path, bbox)
                 content_format = "latex"
 
-            elif elem_type == "Picture":
+            elif elem_type in ("Picture", "Figure"):
                 result = await asyncio.to_thread(
                     extract_picture, pdf_page, bbox, output_dir, page_id * 1000 + reading_order
                 )
