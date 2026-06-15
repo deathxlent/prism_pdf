@@ -22,6 +22,38 @@ TEXT_TYPES = {"Caption", "Footnote", "List-item", "Page-footer", "Page-header",
               "Section-header", "Text", "Title"}
 
 
+def _extract_table_plain_text_from_html(html: str) -> str:
+    if not html:
+        return ""
+    text = re.sub(r'<[^>]+>', ' ', html)
+    text = re.sub(r'&nbsp;', ' ', text)
+    text = re.sub(r'&amp;', '&', text)
+    text = re.sub(r'&lt;', '<', text)
+    text = re.sub(r'&gt;', '>', text)
+    lines = [line.strip() for line in text.split('\n') if line.strip()]
+    return '\n'.join(lines)
+
+
+def _get_first_data_row_plain(table_plain: str) -> list:
+    if not table_plain:
+        return []
+    lines = [l.strip() for l in table_plain.split('\n') if l.strip()]
+    if not lines:
+        return []
+    first_line = lines[0] if len(lines) > 0 else ""
+    return [c.strip() for c in first_line.split() if c.strip()]
+
+
+def _get_last_data_row_plain(table_plain: str) -> list:
+    if not table_plain:
+        return []
+    lines = [l.strip() for l in table_plain.split('\n') if l.strip()]
+    if not lines:
+        return []
+    last_line = lines[-1] if lines else ""
+    return [c.strip() for c in last_line.split() if c.strip()]
+
+
 def set_parse_progress(doc_id: int, stage: str, percent: float, message: str = ""):
     _parse_progress[doc_id] = {
         "stage": stage,
@@ -268,22 +300,20 @@ async def _parse_page(doc_id: int, page_info: dict, doc_dir: str,
                     table_html = content if elem_type == "Table" and content_format == "html" else None
                     table_plain = _extract_table_plain_text_from_html(content) if table_html else None
 
-                    eid = await db.add_element(page_id, elem_type, pdf_bbox, confidence, reading_order,
-                                               content=content, content_format=content_format,
-                                               table_html=table_html, table_plain=table_plain,
-                                               table_rows=table_rows, table_cols=table_cols)
+                    eid = await db.create_element(page_id, elem_type, pdf_bbox, confidence, reading_order,
+                                                  content=content, content_format=content_format)
 
                     if eid and elem_type in element_count:
                         element_count[elem_type] += 1
                         if elem_type == "Table":
                             current_page_last_table_info = {
                                 "element_id": eid,
+                                "col_count": table_cols,
+                                "last_row": _get_last_data_row_plain(table_plain),
                                 "page_number": page_info["page_number"],
-                                "first_row_plain": _get_first_data_row_plain(table_plain),
-                                "last_row_plain": _get_last_data_row_plain(table_plain),
-                                "html": table_html,
-                                "has_caption": False,
-                                "caption_plain": None,
+                                "cross_page_group": None,
+                                "bbox_y1": jpg_bbox[3],
+                                "at_page_bottom": jpg_bbox[3] > jpg_h * 0.7,
                             }
                             last_table_result_idx = len(scanned_elements)
 
@@ -291,10 +321,10 @@ async def _parse_page(doc_id: int, page_info: dict, doc_dir: str,
                     logger.warning(f"Failed to save scanned element [{elem.get('element_type')}]: {e}")
                     continue
 
-            await db.update_page(page_id, status="content_parsed")
+            await db.update_page(page_id, status="completed")
             pdf_doc.close()
             logger.info(f"Page {page_info['page_number']}: scanned parse done -> {len(scanned_elements)} elements: {element_count}")
-            return element_count, current_page_last_table_info, current_cross_page_group, last_table_result_idx
+            return current_page_last_table_info, cross_page_group_counter
 
         except Exception as e:
             logger.error(f"Scanned page direct parse FAILED for page {page_info['page_number']}: {e}. Falling back to normal flow.", exc_info=True)
