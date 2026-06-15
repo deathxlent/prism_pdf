@@ -255,6 +255,32 @@ def detect_layout(image_path: str) -> list[dict]:
         set_raw_layout_data(image_path, [])
         return elements
 
+    from PIL import Image
+    orig_img = Image.open(image_path)
+    orig_w, orig_h = orig_img.size
+
+    model_imgsz = kwargs.get("imgsz", YOLO_IMG_SIZE)
+
+    need_scale = False
+    scale_x = 1.0
+    scale_y = 1.0
+    if boxes is not None and len(boxes) > 0:
+        all_coords = boxes.xyxy.cpu().numpy()
+        max_coord = max(all_coords[:, 2].max(), all_coords[:, 3].max())
+        # Ultralytics YOLO 默认返回原始图片尺寸坐标，但在某些配置下可能返回模型输入尺寸
+        # 关键判断: 如果坐标最大值接近 model_imgsz 且远小于原始图片，说明需要缩放
+        # 如果坐标最大值接近或超过原始图片尺寸，说明已经是原始坐标，无需缩放
+        if max_coord <= model_imgsz * 1.1 and max(orig_w, orig_h) > model_imgsz * 1.2:
+            need_scale = True
+            if orig_w >= orig_h:
+                scale_x = orig_w / model_imgsz
+                scale_y = scale_x
+            else:
+                scale_y = orig_h / model_imgsz
+                scale_x = scale_y
+        elif max_coord > max(orig_w, orig_h) * 1.1:
+            logger.warning(f"YOLO coordinates exceed image size (max_coord={max_coord:.1f}, orig={orig_w}x{orig_h}), clipping to image bounds")
+
     for i in range(len(boxes)):
         box = boxes[i]
         xyxy = box.xyxy[0].cpu().numpy()
@@ -263,9 +289,25 @@ def detect_layout(image_path: str) -> list[dict]:
 
         element_type = YOLO_CATEGORY_MAP.get(cls_id, f"Unknown-{cls_id}")
 
+        if need_scale:
+            x0 = float(xyxy[0]) * scale_x
+            y0 = float(xyxy[1]) * scale_y
+            x1 = float(xyxy[2]) * scale_x
+            y1 = float(xyxy[3]) * scale_y
+        else:
+            x0 = float(xyxy[0])
+            y0 = float(xyxy[1])
+            x1 = float(xyxy[2])
+            y1 = float(xyxy[3])
+
+        x0 = max(0.0, min(x0, orig_w))
+        y0 = max(0.0, min(y0, orig_h))
+        x1 = max(0.0, min(x1, orig_w))
+        y1 = max(0.0, min(y1, orig_h))
+
         raw_elem = {
             "element_type": element_type,
-            "bbox": (float(xyxy[0]), float(xyxy[1]), float(xyxy[2]), float(xyxy[3])),
+            "bbox": (x0, y0, x1, y1),
             "confidence": conf,
             "class_id": cls_id,
             "reading_order": -1,
@@ -274,10 +316,20 @@ def detect_layout(image_path: str) -> list[dict]:
 
         elements.append({
             "element_type": element_type,
-            "bbox": (float(xyxy[0]), float(xyxy[1]), float(xyxy[2]), float(xyxy[3])),
+            "bbox": (x0, y0, x1, y1),
             "confidence": conf,
             "reading_order": -1,
         })
+
+    if need_scale:
+        logger.info(f"YOLO coordinate scaling applied: scale_x={scale_x:.3f}, scale_y={scale_y:.3f} "
+                    f"(orig={orig_w}x{orig_h}, model_imgsz={model_imgsz})")
+    elif boxes is not None and len(boxes) > 0:
+        max_detected = max(all_coords[:, 2].max(), all_coords[:, 3].max())
+        logger.info(f"YOLO using original image coordinates directly "
+                    f"(orig={orig_w}x{orig_h}, model_imgsz={model_imgsz}, max_detected_coord={max_detected:.1f})")
+    else:
+        logger.info(f"YOLO detected no objects in image (orig={orig_w}x{orig_h}, model_imgsz={model_imgsz})")
 
     set_raw_layout_data(image_path, raw_elements)
     logger.info(f"Raw layout data for {Path(image_path).name}: {len(raw_elements)} raw detections before filtering")
@@ -293,6 +345,9 @@ def detect_layout_batch(image_paths: list[str]) -> list[list[dict]]:
     model = _get_model()
     kwargs = _get_inference_kwargs()
     results = model(image_paths, **kwargs)
+    model_imgsz = kwargs.get("imgsz", YOLO_IMG_SIZE)
+
+    from PIL import Image
 
     all_elements = []
     for result_idx, result in enumerate(results):
@@ -301,17 +356,53 @@ def detect_layout_batch(image_paths: list[str]) -> list[list[dict]]:
         image_path = image_paths[result_idx] if result_idx < len(image_paths) else ""
         
         boxes = result.boxes
-        if boxes is not None:
+        if boxes is not None and image_path:
+            orig_img = Image.open(image_path)
+            orig_w, orig_h = orig_img.size
+
+            need_scale = False
+            scale_x = 1.0
+            scale_y = 1.0
+            all_coords = boxes.xyxy.cpu().numpy()
+            max_coord = max(all_coords[:, 2].max(), all_coords[:, 3].max())
+            if max_coord <= model_imgsz * 1.1 and max(orig_w, orig_h) > model_imgsz * 1.2:
+                need_scale = True
+                if orig_w >= orig_h:
+                    scale_x = orig_w / model_imgsz
+                    scale_y = scale_x
+                else:
+                    scale_y = orig_h / model_imgsz
+                    scale_x = scale_y
+            elif max_coord > max(orig_w, orig_h) * 1.1:
+                logger.warning(f"YOLO batch: coordinates exceed image size for {Path(image_path).name} "
+                               f"(max_coord={max_coord:.1f}, orig={orig_w}x{orig_h}), clipping to image bounds")
+
             for i in range(len(boxes)):
                 box = boxes[i]
                 xyxy = box.xyxy[0].cpu().numpy()
                 conf = float(box.conf[0].cpu().numpy())
                 cls_id = int(box.cls[0].cpu().numpy())
                 element_type = YOLO_CATEGORY_MAP.get(cls_id, f"Unknown-{cls_id}")
+
+                if need_scale:
+                    x0 = float(xyxy[0]) * scale_x
+                    y0 = float(xyxy[1]) * scale_y
+                    x1 = float(xyxy[2]) * scale_x
+                    y1 = float(xyxy[3]) * scale_y
+                else:
+                    x0 = float(xyxy[0])
+                    y0 = float(xyxy[1])
+                    x1 = float(xyxy[2])
+                    y1 = float(xyxy[3])
+
+                x0 = max(0.0, min(x0, orig_w))
+                y0 = max(0.0, min(y0, orig_h))
+                x1 = max(0.0, min(x1, orig_w))
+                y1 = max(0.0, min(y1, orig_h))
                 
                 raw_elem = {
                     "element_type": element_type,
-                    "bbox": (float(xyxy[0]), float(xyxy[1]), float(xyxy[2]), float(xyxy[3])),
+                    "bbox": (x0, y0, x1, y1),
                     "confidence": conf,
                     "class_id": cls_id,
                     "reading_order": -1,
@@ -320,10 +411,18 @@ def detect_layout_batch(image_paths: list[str]) -> list[list[dict]]:
                 
                 elements.append({
                     "element_type": element_type,
-                    "bbox": (float(xyxy[0]), float(xyxy[1]), float(xyxy[2]), float(xyxy[3])),
+                    "bbox": (x0, y0, x1, y1),
                     "confidence": conf,
                     "reading_order": -1,
                 })
+
+            if need_scale:
+                logger.info(f"YOLO batch coordinate scaling for {Path(image_path).name}: "
+                            f"scale_x={scale_x:.3f}, scale_y={scale_y:.3f} (orig={orig_w}x{orig_h}, model_imgsz={model_imgsz})")
+            elif len(boxes) > 0:
+                max_detected = max(all_coords[:, 2].max(), all_coords[:, 3].max())
+                logger.info(f"YOLO batch using original coordinates for {Path(image_path).name} "
+                            f"(orig={orig_w}x{orig_h}, model_imgsz={model_imgsz}, max_detected_coord={max_detected:.1f})")
         
         if image_path:
             set_raw_layout_data(image_path, raw_elements)

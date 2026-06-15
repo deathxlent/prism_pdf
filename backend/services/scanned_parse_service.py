@@ -36,7 +36,9 @@ def normalize_text(s: str) -> str:
     return s.strip()
 
 
-def parse_scanned_page_full(jpg_path: str, page_width: int, page_height: int) -> list[dict]:
+def parse_scanned_page_full(jpg_path: str, page_width: int, page_height: int,
+                            table_force_no_header_map: dict = None,
+                            prev_table_last_row_data: list = None) -> list[dict]:
     """
     直接调用 PaddleOCR-VL Table Recognition 解析整页扫描件图片。
 
@@ -44,6 +46,8 @@ def parse_scanned_page_full(jpg_path: str, page_width: int, page_height: int) ->
         jpg_path: 页面 JPG 图片路径
         page_width: JPG 图片宽度（像素）
         page_height: JPG 图片高度（像素）
+        table_force_no_header_map: 字典 {table_block_index: bool}，指定哪些表格块需要强制不识别表头
+        prev_table_last_row_data: 前一页接续表格的最后一行数据（用于本页第一行空单元格合并判断）
 
     Returns:
         元素列表，每个元素包含:
@@ -57,7 +61,6 @@ def parse_scanned_page_full(jpg_path: str, page_width: int, page_height: int) ->
     logger.info(f"[Scanned Parse] Full-page Table Recognition for: {Path(jpg_path).name}")
 
     # Step 1a: 先调用 "OCR:" 拿纯文本（先调用避免被 Table Recognition 缓存截断）
-    # 纯文本用于: (1) 提取页眉页脚 (2) 补全表格缺失的数字列
     plain_ocr_lines = []
     extra_header_content = ""
     extra_footer_content = ""
@@ -67,14 +70,11 @@ def parse_scanned_page_full(jpg_path: str, page_width: int, page_height: int) ->
             plain_ocr_lines = [l.strip() for l in ocr_plain.split('\n') if l.strip()]
 
             # --- 提取页眉 ---
-            # 泛用逻辑: 如果前3行中，选择长度适中且不是纯数字的行作为页眉候选
             found_header_idx = -1
             for i in range(min(3, len(plain_ocr_lines))):
                 line = plain_ocr_lines[i]
-                # 跳过纯数字行（可能是页码）
                 if re.match(r'^\s*\d+\s*$', line):
                     continue
-                # 跳过过短或过长的行
                 if 5 < len(line) < 100:
                     found_header_idx = i
                     break
@@ -137,8 +137,9 @@ def parse_scanned_page_full(jpg_path: str, page_width: int, page_height: int) ->
     blocks = _group_rows_to_blocks(rows)
     logger.info(f"[Scanned Parse] Grouped into {len(blocks)} blocks")
 
-    # Step 4: 估算每个块的 bbox，转为元素
-    elements = _blocks_to_elements(blocks, page_width, page_height)
+    # Step 4: 估算每个块的 bbox，转为元素（支持强制不识别表头）
+    elements = _blocks_to_elements(blocks, page_width, page_height,
+                                   table_force_no_header=table_force_no_header_map)
     logger.info(f"[Scanned Parse] Generated {len(elements)} elements from Table Recognition")
 
     # Step 4b: 插入补充的页眉页脚元素（从纯 OCR 提取的）
@@ -468,53 +469,52 @@ def _group_rows_to_blocks(rows: list[dict]) -> list[dict]:
     return blocks
 
 
-def _blocks_to_elements(blocks: list[dict], page_w: int, page_h: int) -> list[dict]:
+def _blocks_to_elements(blocks: list[dict], page_w: int, page_h: int,
+                        table_force_no_header: dict = None) -> list[dict]:
     """
     将块转换为元素，估算 bbox 坐标。
 
-    bbox 估算策略:
-        1. 先统计所有块的 "视觉总行数" = sum(block.line_count)
-        2. 每行的平均高度 = page_h / (总视觉行数 + 2)（上下留白）
-        3. x 方向: 占页面 90% 宽度居中，表格占更宽
-        4. 表格行高度略大于文本行
+    Args:
+        blocks: 块列表
+        page_w: 页面宽度（像素）
+        page_h: 页面高度（像素）
+        table_force_no_header: 字典 {table_block_index: bool}，指定哪些表格块需要强制不识别表头
     """
     elements = []
+    if table_force_no_header is None:
+        table_force_no_header = {}
 
     # 计算总行数（带权重）
     total_weighted_lines = 0
     for b in blocks:
         if b['type'] == 'table':
-            # 表格每行按 1.5 倍权重计算（表格有边框和 padding）
-            total_weighted_lines += b['line_count'] * 1.5 + 0.5  # + 标题边框
+            total_weighted_lines += b['line_count'] * 1.5 + 0.5
         else:
             total_weighted_lines += b['line_count']
 
-    # 上下各留 5% 边距
     margin_top = page_h * 0.05
     margin_bottom = page_h * 0.05
     usable_h = page_h - margin_top - margin_bottom
-
-    # 加权平均每行高度
     line_h = usable_h / max(total_weighted_lines, 1)
 
-    # x 边距
     margin_x = page_w * 0.05
     text_x0 = margin_x
     text_x1 = page_w - margin_x
-    table_x0 = page_w * 0.02   # 表格占更宽
+    table_x0 = page_w * 0.02
     table_x1 = page_w - page_w * 0.02
 
     current_y = margin_top
+    table_block_idx = 0
 
     for block in blocks:
         block_type = block['type']
         rows = block['rows']
 
         if block_type == 'table':
-            # 构建 HTML 表格
-            html, rows_count, cols_count = _table_rows_to_html(rows)
+            force_hdr = table_force_no_header.get(table_block_idx, False)
+            html, rows_count, cols_count = _table_rows_to_html(rows, force_no_header=force_hdr)
+            table_block_idx += 1
 
-            # 计算高度
             block_h = line_h * (len(rows) * 1.5 + 0.5)
             bbox = (table_x0, current_y, table_x1, current_y + block_h)
 
@@ -530,7 +530,6 @@ def _blocks_to_elements(blocks: list[dict], page_w: int, page_h: int) -> list[di
                     'table_rows': rows_count,
                 })
             else:
-                # 表格构建失败，fallback 为文本
                 plain = _rows_to_plain_text(rows)
                 elements.append({
                     'element_type': 'Text',
@@ -543,12 +542,10 @@ def _blocks_to_elements(blocks: list[dict], page_w: int, page_h: int) -> list[di
 
             current_y += block_h
 
-        else:  # text block
+        else:
             plain = _rows_to_plain_text(rows)
-            block_h = line_h * len(rows) * 1.2  # 文本行略松
-
+            block_h = line_h * len(rows) * 1.2
             bbox = (text_x0, current_y, text_x1, current_y + block_h)
-
             elements.append({
                 'element_type': 'Text',
                 'bbox': bbox,
@@ -557,22 +554,20 @@ def _blocks_to_elements(blocks: list[dict], page_w: int, page_h: int) -> list[di
                 'content': plain,
                 'content_format': 'markdown',
             })
-
             current_y += block_h
 
-        # 块之间留小间距
         current_y += line_h * 0.3
 
     return elements
 
 
-def _table_rows_to_html(rows: list[dict]) -> tuple[str, int, int]:
+def _table_rows_to_html(rows: list[dict], force_no_header: bool = False) -> tuple[str, int, int]:
     """
     将表格行数据转换为带 rowspan/colspan 的 HTML。
 
     处理逻辑:
         1. 先计算最大列数
-        2. 第一行为表头
+        2. 第一行为表头（除非 force_no_header=True）
         3. ucel 标记的行: 第一列是跨行（从最近的非 ucel 行延伸下来）
         4. 跨行用 <td rowspan='N'> 实现
     """
@@ -584,8 +579,6 @@ def _table_rows_to_html(rows: list[dict]) -> tuple[str, int, int]:
     for r in rows:
         ncells = len(r['cells'])
         if r['is_ucel']:
-            # ucel 行的第一列是从上一行继承的，所以实际单元格数 = cells + 1
-            # 但也可能第一格就是合并，所以取较大者
             ncells_actual = max(ncells + 1, ncells)
             max_cols = max(max_cols, ncells_actual)
         else:
@@ -595,30 +588,24 @@ def _table_rows_to_html(rows: list[dict]) -> tuple[str, int, int]:
         return "", 0, 0
 
     # Step 2: 构建 rowspan 映射
-    # rowspan_map[row_idx][col_idx] = 该单元格是否为"被覆盖"（由上面的 rowspan 覆盖）
     covered = [[False] * max_cols for _ in range(len(rows))]
-    # 真实 rowspan 值
     real_rowspan = [[1] * max_cols for _ in range(len(rows))]
 
     for ri in range(len(rows)):
         r = rows[ri]
         if r['is_ucel']:
-            # 第一列是被覆盖的（从上面跨行下来）
-            # 找到这个 ucel 对应的起始行: 往上找最近的非 ucel 行
             start_r = ri - 1
             while start_r >= 0 and rows[start_r]['is_ucel']:
                 start_r -= 1
 
             if start_r >= 0:
-                # 计算跨越的总行数: 从 start_r 一直到这个 ucel 行
                 span_len = ri - start_r + 1
-                # 还需要检查后面还有没有连续的 ucel
                 end_r = ri
                 while end_r + 1 < len(rows) and rows[end_r + 1]['is_ucel']:
                     end_r += 1
                     span_len = end_r - start_r + 1
 
-                covered[ri][0] = True  # 这一行的第 0 列被覆盖
+                covered[ri][0] = True
                 real_rowspan[start_r][0] = max(real_rowspan[start_r][0], span_len)
 
     # Step 3: 生成 HTML
@@ -626,15 +613,13 @@ def _table_rows_to_html(rows: list[dict]) -> tuple[str, int, int]:
     for ri, r in enumerate(rows):
         cells = list(r['cells'])
 
-        # 如果是 ucel，前面补一个空（因为 covered[0]=True，会被跳过输出）
         if r['is_ucel']:
             cells = [''] + cells
 
-        # 补齐到 max_cols
         while len(cells) < max_cols:
             cells.append('')
 
-        is_header = (ri == 0 and not r['is_ucel'])
+        is_header = (not force_no_header) and (ri == 0 and not r['is_ucel'])
         html_parts.append("  <tr>")
 
         for ci in range(max_cols):

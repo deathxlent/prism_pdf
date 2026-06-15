@@ -240,29 +240,16 @@ def _is_continuation_table(curr_table_cols: int, curr_first_row: list,
                           prev_table_cols: int, prev_last_row: list) -> bool:
     """
     判断当前表格是否是前一页表格的接续。
-    
-    判断规则:
-        1. 列数必须相同
-        2. 第一列的内容风格相似（都是数据行，不是表头）
-        3. 前一页最后一行和当前页第一行的非空单元格数量相似
-    
-    注意: 这是一个启发式判断，可能有误判，但可以处理大多数标准表格的跨页接续。
     """
-    # 列数必须相同
     if curr_table_cols != prev_table_cols:
         return False
     
-    # 检查第一列是否为空或包含数据（不是表头）
-    # 如果第一列为空（常见于rowspan接续）或包含数字/普通文本，可能是接续
     curr_first_col = str(curr_first_row[0]).strip() if curr_first_row and curr_first_row[0] else ""
     prev_last_col = str(prev_last_row[0]).strip() if prev_last_row and prev_last_row[0] else ""
     
-    # 如果前一页最后一行第一列是跨行的（空），且当前页第一行第一列也是空的，很可能是接续
     if not curr_first_col and not prev_last_col:
         return True
     
-    # 如果前一页最后一行有数据，当前页第一行也有数据，且列数相同，可能是接续
-    # 检查是否有数字（数据行特征）
     def has_digit(s: str) -> bool:
         return any(c.isdigit() for c in s)
     
@@ -273,6 +260,264 @@ def _is_continuation_table(curr_table_cols: int, curr_first_row: list,
         return True
     
     return False
+
+
+def _parse_html_table(html: str) -> list[list[dict]]:
+    """
+    解析 HTML 表格为二维单元格矩阵。
+    
+    返回: list[list[dict]]，每个单元格包含:
+        - content: str
+        - is_header: bool 
+        - rowspan: int
+        - colspan: int
+        - covered: bool (是否被其他单元格的 rowspan/colspan 覆盖)
+    """
+    if not html:
+        return []
+    
+    from html import unescape
+    rows_match = re.findall(r'<tr[^>]*>(.*?)</tr>', html, re.DOTALL | re.IGNORECASE)
+    if not rows_match:
+        return []
+    
+    temp_matrix = []  # 临时矩阵，存储实际输出的单元格
+    max_cols = 0
+    
+    for ri, row_html in enumerate(rows_match):
+        # 提取所有 td/th
+        cells_match = re.findall(r'<(t[dh])[^>]*>(.*?)</\1>', row_html, re.DOTALL | re.IGNORECASE)
+        
+        row_cells = []
+        for tag, cell_html in cells_match:
+            tag = tag.lower()
+            is_header = tag == 'th'
+            
+            # 提取 rowspan
+            rs_match = re.search(r"rowspan\s*=\s*['\"]?(\d+)", cell_html, re.IGNORECASE)
+            rowspan = int(rs_match.group(1)) if rs_match else 1
+            
+            # 提取 colspan
+            cs_match = re.search(r"colspan\s*=\s*['\"]?(\d+)", cell_html, re.IGNORECASE)
+            colspan = int(cs_match.group(1)) if cs_match else 1
+            
+            # 提取文本内容（去除HTML标签）
+            content = re.sub(r'<[^>]+>', '', cell_html).strip()
+            content = unescape(content)
+            
+            row_cells.append({
+                'content': content,
+                'is_header': is_header,
+                'rowspan': rowspan,
+                'colspan': colspan,
+                'row_idx': ri,
+            })
+        
+        if row_cells:
+            temp_matrix.append(row_cells)
+            row_col_count = sum(c['colspan'] for c in row_cells)
+            max_cols = max(max_cols, row_col_count)
+    
+    # 构建完整的矩阵（包含被覆盖的位置）
+    if not temp_matrix:
+        return []
+    
+    full_matrix = [[None for _ in range(max_cols)] for _ in range(len(temp_matrix))]
+    covered = [[False for _ in range(max_cols)] for _ in range(len(temp_matrix))]
+    
+    for ri, row_cells in enumerate(temp_matrix):
+        col_pos = 0
+        for cell in row_cells:
+            # 跳过已被覆盖的位置
+            while col_pos < max_cols and covered[ri][col_pos]:
+                col_pos += 1
+            if col_pos >= max_cols:
+                break
+            
+            rs = cell['rowspan']
+            cs = cell['colspan']
+            
+            full_matrix[ri][col_pos] = {
+                'content': cell['content'],
+                'is_header': cell['is_header'],
+                'rowspan': rs,
+                'colspan': cs,
+            }
+            
+            # 标记覆盖区域
+            for r in range(ri, min(ri + rs, len(temp_matrix))):
+                for c in range(col_pos, min(col_pos + cs, max_cols)):
+                    if r != ri or c != col_pos:
+                        covered[r][c] = True
+            
+            col_pos += cs
+    
+    return full_matrix
+
+
+def _merge_cross_page_empty_cells(prev_html: str, curr_html: str) -> tuple[str, str, list]:
+    """
+    处理跨页表格接续：将当前页表格第一行的空单元格合并到上一页最后一行。
+    
+    规则:
+    - 当前页第一行的空单元格（空格或空字符串）向上合并到上一页最后一行对应列
+    - 如果连续左侧多列为空，则还需要处理向左合并（增加上一行单元格的 colspan）
+    - 合并后更新 rowspan 和 colspan
+    
+    Returns:
+        (updated_prev_html, updated_curr_html, curr_first_row_non_empty_cells)
+    """
+    if not prev_html or not curr_html:
+        return (prev_html, curr_html, [])
+    
+    from html import escape
+    
+    prev_matrix = _parse_html_table(prev_html)
+    curr_matrix = _parse_html_table(curr_html)
+    
+    if not prev_matrix or not curr_matrix:
+        return (prev_html, curr_html, [])
+    
+    prev_rows = len(prev_matrix)
+    curr_rows = len(curr_matrix)
+    if prev_rows == 0 or curr_rows == 0:
+        return (prev_html, curr_html, [])
+    
+    max_cols = max(len(prev_matrix[0]), len(curr_matrix[0]))
+    
+    # 获取当前页第一行所有单元格，检查哪些是空的
+    curr_first_row = curr_matrix[0]
+    prev_last_row = prev_matrix[-1]
+    
+    empty_cols_in_first_row = []
+    non_empty_cells = []
+    
+    for ci in range(min(max_cols, len(curr_first_row))):
+        cell = curr_first_row[ci]
+        if cell is None:
+            continue
+        content = cell.get('content', '').strip()
+        if not content:
+            empty_cols_in_first_row.append(ci)
+        else:
+            non_empty_cells.append(cell.get('content', ''))
+    
+    if not empty_cols_in_first_row:
+        return (prev_html, curr_html, non_empty_cells)
+    
+    # 计算需要合并的列：连续的空列向左合并到上一行
+    # 策略：从左到右找第一个非空列之前的所有空列，合并到上一行最左边的非空单元格
+    first_non_empty_col = None
+    for ci in range(len(curr_first_row)):
+        cell = curr_first_row[ci]
+        if cell and cell.get('content', '').strip():
+            first_non_empty_col = ci
+            break
+    
+    # 修改前一页最后一行：增加对应单元格的 rowspan
+    # 修改当前页：将第一行空单元格标记为 covered（通过 rowspan 从 prev 延伸）
+    # 实际操作：重新生成 HTML
+    
+    def _build_html_from_matrix(matrix, first_row_force_no_header=False):
+        if not matrix:
+            return ""
+        rows = len(matrix)
+        cols = len(matrix[0])
+        covered = [[False for _ in range(cols)] for _ in range(rows)]
+        
+        html_parts = ["<table border='1' cellpadding='4' cellspacing='0'>"]
+        for ri in range(rows):
+            html_parts.append("  <tr>")
+            for ci in range(cols):
+                if covered[ri][ci]:
+                    continue
+                cell = matrix[ri][ci]
+                if cell is None:
+                    continue
+                
+                is_header = cell.get('is_header', False)
+                if first_row_force_no_header and ri == 0:
+                    is_header = False
+                rowspan = cell.get('rowspan', 1)
+                colspan = cell.get('colspan', 1)
+                content = escape(cell.get('content', ''))
+                
+                tag = "th" if is_header else "td"
+                attrs = ""
+                if rowspan > 1:
+                    attrs += f" rowspan='{rowspan}'"
+                if colspan > 1:
+                    attrs += f" colspan='{colspan}'"
+                
+                html_parts.append(f"    <{tag}{attrs}>{content}</{tag}>")
+                
+                for r in range(ri, min(ri + rowspan, rows)):
+                    for c in range(ci, min(ci + colspan, cols)):
+                        if r != ri or c != ci:
+                            covered[r][c] = True
+            html_parts.append("  </tr>")
+        html_parts.append("</table>")
+        return "\n".join(html_parts)
+    
+    # 构建新的 prev_matrix：增加最后一行对应空列位置的 rowspan
+    new_prev_matrix = [row[:] for row in prev_matrix]
+    for ci in empty_cols_in_first_row:
+        # 找到上一页最后一行中，这个位置的单元格或者左边最近的非空单元格
+        target_ci = ci
+        while target_ci >= 0 and prev_last_row[target_ci] is None:
+            target_ci -= 1
+        if target_ci >= 0 and prev_last_row[target_ci]:
+            # 如果这个单元格还没被扩展，增加 rowspan
+            # 同时也要处理 colspan（如果连续多个空列）
+            if new_prev_matrix[-1][target_ci]:
+                existing_rs = new_prev_matrix[-1][target_ci].get('rowspan', 1)
+                new_prev_matrix[-1][target_ci]['rowspan'] = existing_rs + 1
+    
+    # 如果连续多个空列，需要合并到最左边非空单元格的 colspan
+    if empty_cols_in_first_row and first_non_empty_col is not None and first_non_empty_col > 0:
+        leftmost_target = None
+        for ci in range(first_non_empty_col):
+            if ci < len(prev_last_row) and prev_last_row[ci] and prev_last_row[ci].get('content', '').strip():
+                leftmost_target = ci
+                break
+        
+        if leftmost_target is None:
+            leftmost_target = 0
+        
+        # 增加这个单元格的 colspan 以覆盖所有空列
+        if new_prev_matrix[-1][leftmost_target]:
+            total_empty_cols = first_non_empty_col - leftmost_target
+            existing_cs = new_prev_matrix[-1][leftmost_target].get('colspan', 1)
+            new_prev_matrix[-1][leftmost_target]['colspan'] = existing_cs + total_empty_cols
+            
+            # 标记被覆盖的空列位置为 None（在 prev 最后一行中）
+            for ci in range(leftmost_target + 1, first_non_empty_col):
+                if ci < len(new_prev_matrix[-1]):
+                    new_prev_matrix[-1][ci] = None
+    
+    # 构建新的 curr_matrix：移除第一行中被合并的空单元格（它们将从 prev 延伸）
+    new_curr_matrix = []
+    for ri, row in enumerate(curr_matrix):
+        if ri == 0:
+            # 处理第一行：保留非空单元格，移除被合并的空单元格
+            new_row = []
+            for ci, cell in enumerate(row):
+                if cell is None:
+                    new_row.append(None)
+                    continue
+                if ci in empty_cols_in_first_row:
+                    # 这个空单元格被上一行覆盖，跳过
+                    new_row.append(None)
+                else:
+                    new_row.append(cell.copy() if cell else None)
+            new_curr_matrix.append(new_row)
+        else:
+            new_curr_matrix.append([c.copy() if c else None for c in row])
+    
+    new_prev_html = _build_html_from_matrix(new_prev_matrix)
+    new_curr_html = _build_html_from_matrix(new_curr_matrix, first_row_force_no_header=True)
+    
+    return (new_prev_html, new_curr_html, non_empty_cells)
 
 
 async def _parse_page(doc_id: int, page_info: dict, doc_dir: str, 
@@ -337,6 +582,7 @@ async def _parse_page(doc_id: int, page_info: dict, doc_dir: str,
                 logger.warning(f"Page {page_info['page_number']}: YOLO layout failed (non-critical): {layout_e}")
 
             # Step B: 调用 PaddleOCR-VL 整页解析文本/表格
+            # 注意: 跨页表头和空单元格合并在后续保存元素时处理
             scanned_elements = await asyncio.to_thread(
                 parse_scanned_page_full, jpg_path, jpg_w, jpg_h
             )
@@ -421,6 +667,7 @@ async def _parse_page(doc_id: int, page_info: dict, doc_dir: str,
                     force_no_header_for_this_table = False
                     elem_cross_page_group = None
                     need_retroactive_update = False
+                    updated_prev_table_html = None
                     if elem_type == "Table" and prev_page_table_info is not None:
                         prev_at_page_bottom = prev_page_table_info.get("at_page_bottom", True)
                         is_at_page_top = (bbox[1] < jpg_h * 0.3)
@@ -437,6 +684,48 @@ async def _parse_page(doc_id: int, page_info: dict, doc_dir: str,
                                     cross_page_group_counter += 1
                                     elem_cross_page_group = cross_page_group_counter
                                     need_retroactive_update = True
+                                
+                                # 处理跨页空单元格合并
+                                prev_table_element_id = prev_page_table_info.get("element_id")
+                                prev_table_html_content = prev_page_table_info.get("table_html", "")
+                                if prev_table_element_id and prev_table_html_content and table_html:
+                                    logger.info(f"Page {page_info['page_number']}: 开始处理跨页表格空单元格合并")
+                                    merged_prev_html, merged_curr_html, first_row_cells = _merge_cross_page_empty_cells(
+                                        prev_table_html_content, table_html
+                                    )
+                                    if merged_prev_html != prev_table_html_content:
+                                        updated_prev_table_html = merged_prev_html
+                                        logger.info(f"Page {page_info['page_number']}: 已更新前一页表格HTML")
+                                    if merged_curr_html != table_html:
+                                        table_html = merged_curr_html
+                                        content = merged_curr_html
+                                        logger.info(f"Page {page_info['page_number']}: 已更新当前页表格HTML（合并空单元格）")
+                    
+                    # 强制不识别表头：将第一行 <th> 替换为 <td>
+                    if force_no_header_for_this_table and table_html:
+                        modified_html = re.sub(
+                            r'(<tr[^>]*>\s*)<th\b([^>]*)>',
+                            r'\1<td\2>',
+                            table_html,
+                            count=table_cols if table_cols > 0 else 100,
+                            flags=re.IGNORECASE
+                        )
+                        modified_html = re.sub(
+                            r'</th>\s*</tr>',
+                            r'</td></tr>',
+                            modified_html,
+                            count=1,
+                            flags=re.IGNORECASE
+                        )
+                        table_html = modified_html
+                        content = modified_html
+
+                    # 追溯更新前一页表格的 HTML（如果有跨页合并）
+                    if updated_prev_table_html and prev_page_table_info.get("element_id"):
+                        await db.update_element(
+                            prev_page_table_info["element_id"], content=updated_prev_table_html
+                        )
+                        logger.info(f"Page {page_info['page_number']}: 已保存前一页更新后的表格HTML")
 
                     eid = await db.create_element(page_id, elem_type, bbox, confidence, reading_order,
                                                   content=content, content_format=content_format,
@@ -461,6 +750,7 @@ async def _parse_page(doc_id: int, page_info: dict, doc_dir: str,
                                 "cross_page_group": elem_cross_page_group,
                                 "bbox_y1": bbox[3],
                                 "at_page_bottom": bbox[3] > jpg_h * 0.7,
+                                "table_html": table_html,
                             }
                             last_table_result_idx = len(saved_element_ids)
 
@@ -603,6 +893,7 @@ async def _parse_page(doc_id: int, page_info: dict, doc_dir: str,
                 force_no_header = False
                 elem_cross_page_group = None
                 need_retroactive_update = False
+                updated_prev_table_html = None
                 if prev_page_table_info is not None:
                     prev_at_page_bottom = prev_page_table_info.get("at_page_bottom", True)
                     if force_ocr and elem_idx in table_results:
@@ -630,6 +921,20 @@ async def _parse_page(doc_id: int, page_info: dict, doc_dir: str,
                                     elem_cross_page_group = cross_page_group_counter
                                     current_cross_page_group = cross_page_group_counter
                                     need_retroactive_update = True
+                                
+                                # 处理跨页空单元格合并
+                                prev_table_element_id = prev_page_table_info.get("element_id")
+                                prev_table_html_content = prev_page_table_info.get("table_html", "")
+                                if prev_table_element_id and prev_table_html_content and scanned_html:
+                                    logger.info(f"Page {page_info['page_number']}: 开始处理跨页表格空单元格合并")
+                                    merged_prev_html, merged_curr_html, _ = _merge_cross_page_empty_cells(
+                                        prev_table_html_content, scanned_html
+                                    )
+                                    if merged_prev_html != prev_table_html_content:
+                                        updated_prev_table_html = merged_prev_html
+                                    if merged_curr_html != scanned_html:
+                                        table_results[elem_idx] = dict(scanned_result)
+                                        table_results[elem_idx]["html"] = merged_curr_html
                     else:
                         try:
                             from backend.services.table_service import _find_valid_table
@@ -669,6 +974,27 @@ async def _parse_page(doc_id: int, page_info: dict, doc_dir: str,
                 content = result.get("html", "") or result.get("markdown", "")
                 content_format = "html" if result.get("html") else "markdown"
                 
+                # 处理非扫描版（force_ocr=False）的跨页空单元格合并
+                if (not force_ocr and force_no_header and 
+                    prev_page_table_info and prev_page_table_info.get("element_id") and 
+                    prev_page_table_info.get("table_html") and content):
+                    logger.info(f"Page {page_info['page_number']}: 处理非扫描版跨页表格空单元格合并")
+                    merged_prev_html, merged_curr_html, _ = _merge_cross_page_empty_cells(
+                        prev_page_table_info["table_html"], content
+                    )
+                    if merged_prev_html != prev_page_table_info["table_html"]:
+                        updated_prev_table_html = merged_prev_html
+                    if merged_curr_html != content:
+                        content = merged_curr_html
+                        result["html"] = merged_curr_html
+                
+                # 追溯更新前一页表格的 HTML
+                if updated_prev_table_html and prev_page_table_info.get("element_id"):
+                    await db.update_element(
+                        prev_page_table_info["element_id"], content=updated_prev_table_html
+                    )
+                    logger.info(f"Page {page_info['page_number']}: 已保存前一页更新后的表格HTML")
+                
                 if force_ocr and elem_idx in table_results:
                     scanned_res = table_results[elem_idx]
                     scanned_cols = scanned_res.get("cols", 0)
@@ -686,6 +1012,7 @@ async def _parse_page(doc_id: int, page_info: dict, doc_dir: str,
                                 "cross_page_group": current_cross_page_group,
                                 "bbox_y1": bbox[3],
                                 "at_page_bottom": at_page_bottom,
+                                "table_html": html_content,
                             }
                             last_table_result_idx = len(parsed_results)
                 else:
@@ -706,6 +1033,7 @@ async def _parse_page(doc_id: int, page_info: dict, doc_dir: str,
                                     "cross_page_group": current_cross_page_group,
                                     "bbox_y1": bbox[3],
                                     "at_page_bottom": True,
+                                    "table_html": content,
                                 }
                                 last_table_result_idx = len(parsed_results)
                     except Exception as e:
