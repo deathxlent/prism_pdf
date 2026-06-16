@@ -2,7 +2,7 @@ import logging
 import os
 from PIL import Image
 from backend.services.layout_service import detect_layout
-from backend.config import MODELS_DIR, HF_MIRROR_URL, SURYA_ORDER_MODEL_REPO
+from backend.config import MODELS_DIR, HF_MIRROR_URL, SURYA_ORDER_MODEL_REPO, SURYA_ORDER_DEVICE
 
 logger = logging.getLogger(__name__)
 
@@ -78,11 +78,20 @@ def _get_ordering_model_and_processor():
 
         from surya.model.ordering.model import load_model as order_load_model
         from surya.model.ordering.processor import load_processor as order_load_processor
+        import torch
 
-        logger.info(f"Loading Surya ordering model from {local_model_path} on CPU...")
-        _order_model = order_load_model(checkpoint=local_model_path, device="cpu")
+        device = "cpu"
+        if SURYA_ORDER_DEVICE == "cuda" and torch.cuda.is_available():
+            device = "cuda"
+            logger.info(f"Loading Surya ordering model from {local_model_path} on CUDA...")
+        else:
+            if SURYA_ORDER_DEVICE == "cuda":
+                logger.warning("CUDA not available, falling back to CPU for Surya ordering model")
+            logger.info(f"Loading Surya ordering model from {local_model_path} on CPU...")
+
+        _order_model = order_load_model(checkpoint=local_model_path, device=device)
         _order_processor = order_load_processor(checkpoint=local_model_path)
-        logger.info("Surya ordering model loaded successfully on CPU")
+        logger.info(f"Surya ordering model loaded successfully on {device.upper()}")
     except Exception as e:
         logger.warning(f"Failed to load Surya ordering model: {e}. Will use fallback reading order.")
         import traceback

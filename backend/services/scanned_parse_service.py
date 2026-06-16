@@ -36,6 +36,38 @@ def normalize_text(s: str) -> str:
     return s.strip()
 
 
+def parse_scanned_pages_batch(page_info_list: list[dict]) -> list[list[dict]]:
+    """
+    批量解析扫描版 PDF 页面。
+
+    Args:
+        page_info_list: 页面信息列表，每个元素包含:
+            - jpg_path: 页面 JPG 图片路径
+            - page_width: JPG 图片宽度（像素）
+            - page_height: JPG 图片高度（像素）
+
+    Returns:
+        每页的元素列表
+    """
+    logger.info(f"[Scanned Parse Batch] Starting batch parse for {len(page_info_list)} scanned pages")
+    
+    results = []
+    for idx, page_info in enumerate(page_info_list):
+        jpg_path = page_info["jpg_path"]
+        page_width = page_info["page_width"]
+        page_height = page_info["page_height"]
+        logger.info(f"[Scanned Parse Batch] Processing page {idx + 1}/{len(page_info_list)}: {Path(jpg_path).name}")
+        try:
+            elements = parse_scanned_page_full(jpg_path, page_width, page_height)
+            results.append(elements)
+        except Exception as e:
+            logger.error(f"[Scanned Parse Batch] Failed to parse page {idx + 1}: {e}")
+            results.append([])
+    
+    logger.info(f"[Scanned Parse Batch] Batch parse completed: {len(results)} pages")
+    return results
+
+
 def parse_scanned_page_full(jpg_path: str, page_width: int, page_height: int,
                             table_force_no_header_map: dict = None,
                             prev_table_last_row_data: list = None) -> list[dict]:

@@ -12,7 +12,7 @@ from backend.services.order_service import assign_reading_order, assign_reading_
 from backend.services.ocr_service_vl import ocr_region, ocr_formula, ocr_batch, ocr_batch_multi_image
 from backend.services.table_service import extract_table_from_native, extract_table_from_scanned
 from backend.services.picture_service import extract_picture
-from backend.services.scanned_parse_service import parse_scanned_page_full
+from backend.services.scanned_parse_service import parse_scanned_page_full, parse_scanned_pages_batch
 
 logger = logging.getLogger(__name__)
 
@@ -175,23 +175,29 @@ async def process_document(doc_id: int):
 
         all_jpg_paths = []
         non_scanned_indices = []
+        scanned_indices = []
         for page_idx, page in enumerate(pages):
             jpg_path = page["jpg_path"]
             all_jpg_paths.append(jpg_path)
-            if not page.get("is_scanned"):
+            if page.get("is_scanned"):
+                scanned_indices.append(page_idx)
+            else:
                 non_scanned_indices.append(page_idx)
 
         non_scanned_jpg_paths = [all_jpg_paths[i] for i in non_scanned_indices]
-        logger.info(f"Total pages: {len(pages)}, non-scanned: {len(non_scanned_indices)}, scanned: {len(pages) - len(non_scanned_indices)}")
+        scanned_jpg_paths = [all_jpg_paths[i] for i in scanned_indices]
+        logger.info(f"Total pages: {len(pages)}, non-scanned: {len(non_scanned_indices)}, scanned: {len(scanned_indices)}")
 
         layouts_with_order = [[] for _ in range(len(pages))]
+        scanned_picture_elements = [[] for _ in range(len(pages))]
+        scanned_ocr_elements = [[] for _ in range(len(pages))]
 
         if non_scanned_jpg_paths:
-            set_parse_progress(doc_id, "parsing_layout", 35, f"批量检测布局（{len(non_scanned_indices)} 个非扫描页）...")
+            set_parse_progress(doc_id, "parsing_layout", 30, f"批量检测布局（{len(non_scanned_indices)} 个非扫描页）...")
             logger.info("Batch detecting layouts for non-scanned pages...")
             non_scanned_layouts = await asyncio.to_thread(detect_layout_batch, non_scanned_jpg_paths)
 
-            set_parse_progress(doc_id, "parsing_layout", 50, f"分配阅读顺序（{len(non_scanned_indices)} 个非扫描页）...")
+            set_parse_progress(doc_id, "parsing_layout", 40, f"分配阅读顺序（{len(non_scanned_indices)} 个非扫描页）...")
             logger.info("Batch assigning reading orders for non-scanned pages...")
             non_scanned_with_order = await asyncio.to_thread(
                 assign_reading_order_batch, non_scanned_layouts, non_scanned_jpg_paths
@@ -200,14 +206,76 @@ async def process_document(doc_id: int):
             for i, ns_idx in enumerate(non_scanned_indices):
                 layouts_with_order[ns_idx] = non_scanned_with_order[i]
 
+        if scanned_jpg_paths:
+            set_parse_progress(doc_id, "parsing_layout", 30, f"扫描页批量YOLO布局检测（{len(scanned_indices)} 页）...")
+            logger.info(f"Batch YOLO layout detection for {len(scanned_indices)} scanned pages...")
+            scanned_layouts = await asyncio.to_thread(detect_layout_batch, scanned_jpg_paths)
+
+            for i, s_idx in enumerate(scanned_indices):
+                jpg_path = scanned_jpg_paths[i]
+                jpg_w = pages[s_idx]["jpg_width"]
+                jpg_h = pages[s_idx]["jpg_height"]
+                page_area = jpg_w * jpg_h
+                picture_elems = []
+                for le in scanned_layouts[i]:
+                    if le["element_type"] in ("Picture", "Figure"):
+                        elem_bbox = le["bbox"]
+                        elem_area = (elem_bbox[2] - elem_bbox[0]) * (elem_bbox[3] - elem_bbox[1])
+                        if elem_area < page_area * 0.5:
+                            picture_elems.append({
+                                "element_type": le["element_type"],
+                                "bbox": elem_bbox,
+                                "confidence": le["confidence"],
+                                "reading_order": 0,
+                                "content": "",
+                                "content_format": "image_path",
+                                "_is_layout_picture": True,
+                            })
+                scanned_picture_elements[s_idx] = picture_elems
+                logger.info(f"Page {pages[s_idx]['page_number']}: YOLO found {len(picture_elems)} Picture/Figure elements")
+
+            set_parse_progress(doc_id, "parsing_layout", 45, f"扫描页批量OCR整页解析（{len(scanned_indices)} 页）...")
+            logger.info(f"Batch full-page OCR for {len(scanned_indices)} scanned pages...")
+            scanned_page_info = []
+            for s_idx in scanned_indices:
+                scanned_page_info.append({
+                    "jpg_path": pages[s_idx]["jpg_path"],
+                    "page_width": pages[s_idx]["jpg_width"],
+                    "page_height": pages[s_idx]["jpg_height"],
+                })
+            scanned_ocr_results = await asyncio.to_thread(
+                parse_scanned_pages_batch, scanned_page_info
+            )
+
+            for i, s_idx in enumerate(scanned_indices):
+                scanned_ocr_elements[s_idx] = scanned_ocr_results[i]
+                logger.info(f"Page {pages[s_idx]['page_number']}: OCR found {len(scanned_ocr_results[i])} elements")
+
+            set_parse_progress(doc_id, "parsing_layout", 50, f"扫描页批量分配阅读顺序（{len(scanned_indices)} 页）...")
+            logger.info(f"Batch assigning reading orders for {len(scanned_indices)} scanned pages...")
+            scanned_all_elements = []
+            for s_idx in scanned_indices:
+                all_elems = scanned_picture_elements[s_idx] + scanned_ocr_elements[s_idx]
+                scanned_all_elements.append(all_elems)
+
+            scanned_with_order = await asyncio.to_thread(
+                assign_reading_order_batch, scanned_all_elements, scanned_jpg_paths
+            )
+
+            for i, s_idx in enumerate(scanned_indices):
+                pages[s_idx]["_scanned_picture_elements"] = scanned_picture_elements[s_idx]
+                pages[s_idx]["_scanned_ocr_elements"] = scanned_ocr_elements[s_idx]
+                pages[s_idx]["_scanned_all_elements"] = scanned_with_order[i]
+
         for page_idx, page in enumerate(pages):
             try:
-                page["_elements"] = layouts_with_order[page_idx]
-                if page.get("is_scanned"):
-                    logger.info(f"Page {page['page_number']}: scanned page, will use direct PaddleOCR-VL full-page parse (skip YOLO+Surya)")
+                if not page.get("is_scanned"):
+                    page["_elements"] = layouts_with_order[page_idx]
+                else:
+                    page["_elements"] = page.get("_scanned_all_elements", [])
             except Exception as e:
-                    logger.error(f"Failed to assign reading order for page {page['page_number']}: {e}")
-                    page["_elements"] = []
+                logger.error(f"Failed to prepare elements for page {page['page_number']}: {e}")
+                page["_elements"] = []
 
         # 用于跨页表格检测：记录前一页最后一个表格的特征
         prev_page_table_info = None
@@ -559,8 +627,8 @@ async def _parse_page(doc_id: int, page_info: dict, doc_dir: str,
     # 先做 YOLO layout 提取 Picture/Figure (logo 等)，
     # 再调用 PaddleOCR-VL 1.6 Table Recognition 整页解析文本/表格，
     # 最后按坐标合并两部分结果
-    if is_scanned and not elements:
-        logger.info(f"Page {page_info['page_number']}: SCANNED PAGE -> using YOLO layout + PaddleOCR-VL full-page parse")
+    if is_scanned:
+        logger.info(f"Page {page_info['page_number']}: SCANNED PAGE -> processing scanned page")
         try:
             from PIL import Image
             with Image.open(jpg_path) as im:
@@ -568,42 +636,48 @@ async def _parse_page(doc_id: int, page_info: dict, doc_dir: str,
 
             _save_ocr_raw_output(jpg_path, page_info["page_number"], doc_dir)
 
-            # Step A: 先做 YOLO layout，专门提取 Picture/Figure (logo 等 OCR 不识别的元素)
-            picture_elements = []
-            try:
-                from backend.services.layout_service import detect_layout
-                raw_layout = await asyncio.to_thread(detect_layout, jpg_path)
-                for le in raw_layout:
-                    if le["element_type"] in ("Picture", "Figure"):
-                        elem_bbox = le["bbox"]
-                        elem_area = (elem_bbox[2] - elem_bbox[0]) * (elem_bbox[3] - elem_bbox[1])
-                        page_area = jpg_w * jpg_h
-                        # 过滤掉过大的 Picture (可能是误检的整页背景)
-                        if elem_area < page_area * 0.5:
-                            picture_elements.append({
-                                "element_type": le["element_type"],
-                                "bbox": elem_bbox,
-                                "confidence": le["confidence"],
-                                "reading_order": 0,
-                                "content": "",
-                                "content_format": "image_path",
-                                "_is_layout_picture": True,
-                            })
-                logger.info(f"Page {page_info['page_number']}: YOLO layout found {len(picture_elements)} Picture/Figure elements")
-            except Exception as layout_e:
-                logger.warning(f"Page {page_info['page_number']}: YOLO layout failed (non-critical): {layout_e}")
+            all_elements = elements
+            if not all_elements:
+                logger.info(f"Page {page_info['page_number']}: No pre-processed elements, doing full page parse now...")
+                
+                # Step A: 先做 YOLO layout，专门提取 Picture/Figure (logo 等 OCR 不识别的元素)
+                picture_elements = []
+                try:
+                    from backend.services.layout_service import detect_layout
+                    raw_layout = await asyncio.to_thread(detect_layout, jpg_path)
+                    for le in raw_layout:
+                        if le["element_type"] in ("Picture", "Figure"):
+                            elem_bbox = le["bbox"]
+                            elem_area = (elem_bbox[2] - elem_bbox[0]) * (elem_bbox[3] - elem_bbox[1])
+                            page_area = jpg_w * jpg_h
+                            # 过滤掉过大的 Picture (可能是误检的整页背景)
+                            if elem_area < page_area * 0.5:
+                                picture_elements.append({
+                                    "element_type": le["element_type"],
+                                    "bbox": elem_bbox,
+                                    "confidence": le["confidence"],
+                                    "reading_order": 0,
+                                    "content": "",
+                                    "content_format": "image_path",
+                                    "_is_layout_picture": True,
+                                })
+                    logger.info(f"Page {page_info['page_number']}: YOLO layout found {len(picture_elements)} Picture/Figure elements")
+                except Exception as layout_e:
+                    logger.warning(f"Page {page_info['page_number']}: YOLO layout failed (non-critical): {layout_e}")
 
-            # Step B: 调用 PaddleOCR-VL 整页解析文本/表格
-            # 注意: 跨页表头和空单元格合并在后续保存元素时处理
-            scanned_elements = await asyncio.to_thread(
-                parse_scanned_page_full, jpg_path, jpg_w, jpg_h
-            )
+                # Step B: 调用 PaddleOCR-VL 整页解析文本/表格
+                # 注意: 跨页表头和空单元格合并在后续保存元素时处理
+                scanned_elements = await asyncio.to_thread(
+                    parse_scanned_page_full, jpg_path, jpg_w, jpg_h
+                )
 
-            # Step C: 合并 Picture/Figure 和 OCR 解析结果，用 Surya 模型分配阅读顺序
-            all_elements = picture_elements + scanned_elements
-            all_elements = await asyncio.to_thread(
-                assign_reading_order, all_elements, jpg_path
-            )
+                # Step C: 合并 Picture/Figure 和 OCR 解析结果，用 Surya 模型分配阅读顺序
+                all_elements = picture_elements + scanned_elements
+                all_elements = await asyncio.to_thread(
+                    assign_reading_order, all_elements, jpg_path
+                )
+            else:
+                logger.info(f"Page {page_info['page_number']}: Using pre-processed elements ({len(all_elements)} elements)")
 
             element_count = {
                 "Text": 0, "Section-header": 0, "Title": 0, "Table": 0,
