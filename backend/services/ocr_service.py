@@ -48,7 +48,9 @@ def _get_ocr_engine():
 
     try:
         from paddleocr import PaddleOCR
-        logger.info("Initializing PaddleOCR engine...")
+        import paddle
+        use_gpu = paddle.device.is_compiled_with_cuda()
+        logger.info(f"Initializing PaddleOCR engine (use_gpu={use_gpu})...")
         det_dir, rec_dir, cls_dir = _ensure_models_ready()
         _ocr_engine = PaddleOCR(
             det_model_dir=det_dir,
@@ -57,8 +59,9 @@ def _get_ocr_engine():
             use_angle_cls=False,
             lang="ch",
             show_log=False,
+            use_gpu=use_gpu,
         )
-        logger.info("PaddleOCR engine loaded successfully")
+        logger.info(f"PaddleOCR engine loaded successfully (use_gpu={use_gpu})")
     except Exception as e:
         logger.error(f"Failed to initialize PaddleOCR: {e}")
         raise

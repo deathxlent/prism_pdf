@@ -175,50 +175,85 @@ async def process_document(doc_id: int):
 
         all_jpg_paths = []
         non_scanned_indices = []
+        scanned_indices = []
         for page_idx, page in enumerate(pages):
             jpg_path = page["jpg_path"]
             all_jpg_paths.append(jpg_path)
             if not page.get("is_scanned"):
                 non_scanned_indices.append(page_idx)
+            else:
+                scanned_indices.append(page_idx)
 
         non_scanned_jpg_paths = [all_jpg_paths[i] for i in non_scanned_indices]
-        logger.info(f"Total pages: {len(pages)}, non-scanned: {len(non_scanned_indices)}, scanned: {len(pages) - len(non_scanned_indices)}")
+        scanned_jpg_paths = [all_jpg_paths[i] for i in scanned_indices]
+        logger.info(f"Total pages: {len(pages)}, non-scanned: {len(non_scanned_indices)}, scanned: {len(scanned_indices)}")
+
+        set_parse_progress(doc_id, "loading_models", 30, "加载 YOLO 模型到显存...")
+        from backend.services.layout_service import _get_model
+        await asyncio.to_thread(_get_model)
+
+        from backend.services.order_service import check_vram_available, is_surya_loaded, should_skip_surya
+        surya_available = False
+        if not should_skip_surya():
+            vram_ok, free_mb = check_vram_available()
+            logger.info(f"VRAM check after YOLO loaded: free={free_mb}MB, sufficient={vram_ok}")
+            if vram_ok:
+                set_parse_progress(doc_id, "loading_models", 33, "显存充足，加载 Surya 排序模型...")
+                from backend.services.order_service import _get_ordering_model_and_processor
+                model, processor = await asyncio.to_thread(_get_ordering_model_and_processor)
+                if model is not None and processor is not None:
+                    surya_available = True
+                else:
+                    surya_available = False
+            else:
+                surya_available = False
+                logger.warning(f"Insufficient VRAM ({free_mb}MB free) for Surya model, skipping reading order")
+        else:
+            surya_available = is_surya_loaded()
 
         layouts_with_order = [[] for _ in range(len(pages))]
+        page_is_ordered = [True] * len(pages)
 
         if non_scanned_jpg_paths:
             set_parse_progress(doc_id, "parsing_layout", 35, f"批量检测布局（{len(non_scanned_indices)} 个非扫描页）...")
             logger.info("Batch detecting layouts for non-scanned pages...")
             non_scanned_layouts = await asyncio.to_thread(detect_layout_batch, non_scanned_jpg_paths)
 
-            set_parse_progress(doc_id, "parsing_layout", 50, f"分配阅读顺序（{len(non_scanned_indices)} 个非扫描页）...")
-            logger.info("Batch assigning reading orders for non-scanned pages...")
-            non_scanned_with_order = await asyncio.to_thread(
-                assign_reading_order_batch, non_scanned_layouts, non_scanned_jpg_paths
-            )
+            if surya_available:
+                set_parse_progress(doc_id, "parsing_layout", 50, f"分配阅读顺序（{len(non_scanned_indices)} 个非扫描页）...")
+                logger.info("Batch assigning reading orders for non-scanned pages...")
+                non_scanned_with_order = await asyncio.to_thread(
+                    assign_reading_order_batch, non_scanned_layouts, non_scanned_jpg_paths
+                )
+            else:
+                logger.info("Surya not available, using fallback reading order for non-scanned pages")
+                from backend.services.order_service import _fallback_reading_order
+                non_scanned_with_order = [_fallback_reading_order(elems) for elems in non_scanned_layouts]
 
             for i, ns_idx in enumerate(non_scanned_indices):
                 layouts_with_order[ns_idx] = non_scanned_with_order[i]
+                page_is_ordered[ns_idx] = surya_available
 
         for page_idx, page in enumerate(pages):
             try:
                 page["_elements"] = layouts_with_order[page_idx]
                 if page.get("is_scanned"):
-                    logger.info(f"Page {page['page_number']}: scanned page, will use direct PaddleOCR-VL full-page parse (skip YOLO+Surya)")
+                    logger.info(f"Page {page['page_number']}: scanned page, will use PaddleOCR-VL full-page parse")
             except Exception as e:
                     logger.error(f"Failed to assign reading order for page {page['page_number']}: {e}")
                     page["_elements"] = []
 
-        # 用于跨页表格检测：记录前一页最后一个表格的特征
         prev_page_table_info = None
         cross_page_group_counter = 0
         
         for i, page in enumerate(pages):
             try:
+                page["_is_ordered"] = page_is_ordered[i]
                 set_parse_progress(doc_id, "parsing_content", 55 + (i / total_pages) * 40, 
                                   f"解析页面 {page['page_number']}/{total_pages}")
                 current_page_table_info, cross_page_group_counter = await _parse_page(
-                    doc_id, page, doc_dir, prev_page_table_info, cross_page_group_counter
+                    doc_id, page, doc_dir, prev_page_table_info, cross_page_group_counter,
+                    surya_available=surya_available
                 )
                 prev_page_table_info = current_page_table_info
             except Exception as e:
@@ -534,11 +569,13 @@ def _merge_cross_page_empty_cells(prev_html: str, curr_html: str) -> tuple[str, 
 
 async def _parse_page(doc_id: int, page_info: dict, doc_dir: str, 
                       prev_page_table_info: dict = None,
-                      cross_page_group_counter: int = 0):
+                      cross_page_group_counter: int = 0,
+                      surya_available: bool = True):
     page_id = page_info["id"]
     jpg_path = page_info["jpg_path"]
     single_pdf_path = page_info["single_pdf_path"]
     is_scanned = page_info["is_scanned"]
+    is_ordered = page_info.get("_is_ordered", True)
     elements = page_info.get("_elements", [])
     
     from backend.services.pdf_service import jpg_bbox_to_pdf_bbox, DEFAULT_DPI
@@ -601,9 +638,16 @@ async def _parse_page(doc_id: int, page_info: dict, doc_dir: str,
 
             # Step C: 合并 Picture/Figure 和 OCR 解析结果，用 Surya 模型分配阅读顺序
             all_elements = picture_elements + scanned_elements
-            all_elements = await asyncio.to_thread(
-                assign_reading_order, all_elements, jpg_path
-            )
+            if surya_available:
+                all_elements = await asyncio.to_thread(
+                    assign_reading_order, all_elements, jpg_path
+                )
+                await db.update_page(page_id, is_ordered=1)
+            else:
+                from backend.services.order_service import _fallback_reading_order
+                all_elements = _fallback_reading_order(all_elements)
+                await db.update_page(page_id, is_ordered=0)
+                logger.info(f"Page {page_info['page_number']}: Surya not available, using fallback order, marked as unordered")
 
             element_count = {
                 "Text": 0, "Section-header": 0, "Title": 0, "Table": 0,
@@ -1127,8 +1171,8 @@ async def _parse_page(doc_id: int, page_info: dict, doc_dir: str,
                 prev_page_table_info["cross_page_group"] = result["cross_page_group"]
 
     pdf_doc.close()
-    await db.update_page(page_id, status="completed")
-    logger.info(f"Page {page_info['page_number']}: parsing completed")
+    await db.update_page(page_id, status="completed", is_ordered=1 if is_ordered else 0)
+    logger.info(f"Page {page_info['page_number']}: parsing completed (ordered={is_ordered})")
     
     return current_page_last_table_info, cross_page_group_counter
 
@@ -1150,6 +1194,7 @@ async def get_parse_results(doc_id: int) -> dict:
             "jpg_width": page["jpg_width"],
             "jpg_height": page["jpg_height"],
             "is_scanned": bool(page["is_scanned"]),
+            "is_ordered": bool(page.get("is_ordered", 1)),
             "status": page["status"],
             "elements": [],
         }
