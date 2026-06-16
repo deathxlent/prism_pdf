@@ -211,6 +211,7 @@ async def reorder_elements(page_id: int, data: dict):
                 "UPDATE page_elements SET reading_order = ? WHERE id = ? AND page_id = ?",
                 (idx, elem_id, page_id)
             )
+        await db.update_page(page_id, is_ordered=1)
         await conn.commit()
 
     return {"message": "Elements reordered", "page_id": page_id}

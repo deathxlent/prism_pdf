@@ -233,8 +233,21 @@ async function loadDocuments() {
     try {
         const res = await fetch(API + '/api/documents');
         const data = await res.json();
-        renderDocumentsList(data.documents);
-        renderDocumentsGrid(data.documents);
+        
+        const docsWithStatus = await Promise.all(
+            data.documents.map(async doc => {
+                try {
+                    const statusRes = await fetch(API + '/api/status/' + doc.id);
+                    const statusData = await statusRes.json();
+                    return { ...doc, unordered_count: statusData.unordered_count || 0 };
+                } catch (e) {
+                    return { ...doc, unordered_count: 0 };
+                }
+            })
+        );
+        
+        renderDocumentsList(docsWithStatus);
+        renderDocumentsGrid(docsWithStatus);
     } catch (e) {
         console.error('Failed to load documents:', e);
     }
@@ -297,6 +310,10 @@ function renderDocumentsList(docs) {
                         <td class="doc-name-cell" onclick="viewDocument(${doc.id})">
                             <i class="fas fa-file-pdf" style="color: var(--error); margin-right: 0.5rem;"></i>
                             ${escapeHtml(doc.original_filename)}
+                            ${doc.unordered_count && doc.unordered_count > 0 ? 
+                                `<span class="unordered-page-count" title="未排序页数">
+                                    <i class="fas fa-exclamation-triangle"></i> ${doc.unordered_count}页未排序
+                                </span>` : ''}
                         </td>
                         <td class="doc-time">${formatDateTime(doc.created_at)}</td>
                         <td class="doc-time">${doc.status === 'completed' ? formatDateTime(doc.updated_at) : '-'}</td>
@@ -448,9 +465,11 @@ function renderThumbnails() {
     const container = $('#thumbs-list');
     container.innerHTML = currentPages.map((page, idx) => {
         const imgSrc = page.jpg_path ? `${API}/api/file/${encodeURIComponent(page.jpg_path)}` : null;
+        const unordered = page.is_ordered === false;
 
         return `
             <div class="thumb-item ${idx === currentPageIndex ? 'active' : ''}" data-index="${idx}" onclick="loadPage(${idx})">
+                ${unordered ? '<span class="thumb-unordered" title="未排序"><i class="fas fa-exclamation-triangle"></i></span>' : ''}
                 ${imgSrc ? 
                     `<img src="${imgSrc}" alt="第 ${page.page_number} 页" onerror="this.outerHTML='<div class=\\'thumb-placeholder\\'>第 ${page.page_number} 页</div>'">` :
                     `<div class="thumb-placeholder">第 ${page.page_number} 页</div>`
@@ -487,6 +506,18 @@ async function loadPage(index) {
         const data = await res.json();
         currentElements = data.elements;
         currentPageData = page;
+
+        const isOrdered = data.is_ordered !== false && page.is_ordered !== false;
+        const unorderedBadge = $('#unordered-badge');
+        const reorderBtn = $('#reorder-btn');
+        
+        if (isOrdered) {
+            unorderedBadge.classList.add('hidden');
+            reorderBtn.style.display = '';
+        } else {
+            unorderedBadge.classList.remove('hidden');
+            reorderBtn.style.display = '';
+        }
 
         await renderPdfPage(page);
         renderElements();
@@ -857,6 +888,17 @@ async function saveOrder() {
         sorted.forEach((elem, idx) => {
             elem.reading_order = idx;
         });
+
+        if (currentPageData) {
+            currentPageData.is_ordered = true;
+        }
+        const idx = currentPages.findIndex(p => p.id === currentPageData.id);
+        if (idx >= 0) {
+            currentPages[idx].is_ordered = true;
+        }
+
+        $('#unordered-badge').classList.add('hidden');
+        renderThumbnails();
 
         isEditOrderMode = false;
         originalOrder = [];
@@ -1334,6 +1376,66 @@ function exportCurrentPagePdf() {
 
     try {
         const url = `${API}/api/pages/${currentPageData.id}/pdf`;
+        const a = document.createElement('a');
+        a.href = url;
+        a.target = '_blank';
+        a.click();
+    } catch (e) {
+        alert('导出失败: ' + e.message);
+    }
+}
+
+async function reorderCurrentPage() {
+    if (!currentPageData) return;
+
+    const confirmMsg = '确定要使用Surya模型对该页进行重新排序吗？\n\n注意：如果显存不足，可能会失败。';
+    if (!confirm(confirmMsg)) return;
+
+    const reorderBtn = $('#reorder-btn');
+    const originalText = reorderBtn.innerHTML;
+    reorderBtn.disabled = true;
+    reorderBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 排序中...';
+
+    try {
+        const res = await fetch(`${API}/api/pages/${currentPageData.id}/reorder`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.detail || '重排序失败');
+        }
+
+        const result = await res.json();
+        
+        if (currentPageData) {
+            currentPageData.is_ordered = true;
+        }
+        
+        const idx = currentPages.findIndex(p => p.id === currentPageData.id);
+        if (idx >= 0) {
+            currentPages[idx].is_ordered = true;
+        }
+
+        renderThumbnails();
+        loadPage(currentPageIndex);
+        
+        alert('重排序成功！页面元素已重新排序。');
+    } catch (e) {
+        console.error('Reorder failed:', e);
+        alert('重排序失败: ' + e.message);
+    } finally {
+        reorderBtn.disabled = false;
+        reorderBtn.innerHTML = originalText;
+    }
+}
+
+function exportDocumentHtmlZip() {
+    if (!currentDocId) return;
+
+    try {
+        const url = `${API}/api/documents/${currentDocId}/export/html-zip`;
         const a = document.createElement('a');
         a.href = url;
         a.target = '_blank';
