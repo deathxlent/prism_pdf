@@ -8,7 +8,7 @@ from backend.services.pdf_service import (
     validate_pdf, prepare_pages, extract_text_in_region, detect_garbled_text
 )
 from backend.services.layout_service import detect_layout_batch, deduplicate_header_footer
-from backend.services.order_service import assign_reading_order, assign_reading_order_batch
+from backend.services.order_service import assign_reading_order, assign_reading_order_batch, check_gpu_available_for_surya
 from backend.services.ocr_service_vl import ocr_region, ocr_formula, ocr_batch, ocr_batch_multi_image
 from backend.services.table_service import extract_table_from_native, extract_table_from_scanned
 from backend.services.picture_service import extract_picture
@@ -189,8 +189,11 @@ async def process_document(doc_id: int):
         logger.info(f"Total pages: {len(pages)}, non-scanned: {len(non_scanned_indices)}, scanned: {len(scanned_indices)}")
 
         layouts_with_order = [[] for _ in range(len(pages))]
+        page_is_ordered = [True] * len(pages)
         scanned_picture_elements = [[] for _ in range(len(pages))]
         scanned_ocr_elements = [[] for _ in range(len(pages))]
+
+        surya_gpu_ok = await asyncio.to_thread(check_gpu_available_for_surya)
 
         if non_scanned_jpg_paths:
             set_parse_progress(doc_id, "parsing_layout", 30, f"批量检测布局（{len(non_scanned_indices)} 个非扫描页）...")
@@ -199,12 +202,15 @@ async def process_document(doc_id: int):
 
             set_parse_progress(doc_id, "parsing_layout", 40, f"分配阅读顺序（{len(non_scanned_indices)} 个非扫描页）...")
             logger.info("Batch assigning reading orders for non-scanned pages...")
-            non_scanned_with_order = await asyncio.to_thread(
+            non_scanned_with_order, non_scanned_surya_ordered = await asyncio.to_thread(
                 assign_reading_order_batch, non_scanned_layouts, non_scanned_jpg_paths
             )
 
             for i, ns_idx in enumerate(non_scanned_indices):
                 layouts_with_order[ns_idx] = non_scanned_with_order[i]
+                page_is_ordered[ns_idx] = non_scanned_surya_ordered[i]
+                if not non_scanned_surya_ordered[i]:
+                    logger.info(f"Page {pages[ns_idx]['page_number']}: Surya not available, marked as unordered")
 
         if scanned_jpg_paths:
             set_parse_progress(doc_id, "parsing_layout", 30, f"扫描页批量YOLO布局检测（{len(scanned_indices)} 页）...")
@@ -258,7 +264,7 @@ async def process_document(doc_id: int):
                 all_elems = scanned_picture_elements[s_idx] + scanned_ocr_elements[s_idx]
                 scanned_all_elements.append(all_elems)
 
-            scanned_with_order = await asyncio.to_thread(
+            scanned_with_order, scanned_surya_ordered = await asyncio.to_thread(
                 assign_reading_order_batch, scanned_all_elements, scanned_jpg_paths
             )
 
@@ -266,9 +272,13 @@ async def process_document(doc_id: int):
                 pages[s_idx]["_scanned_picture_elements"] = scanned_picture_elements[s_idx]
                 pages[s_idx]["_scanned_ocr_elements"] = scanned_ocr_elements[s_idx]
                 pages[s_idx]["_scanned_all_elements"] = scanned_with_order[i]
+                page_is_ordered[s_idx] = scanned_surya_ordered[i]
+                if not scanned_surya_ordered[i]:
+                    logger.info(f"Page {pages[s_idx]['page_number']}: Surya not available, marked as unordered")
 
         for page_idx, page in enumerate(pages):
             try:
+                page["_is_ordered"] = page_is_ordered[page_idx]
                 if not page.get("is_scanned"):
                     page["_elements"] = layouts_with_order[page_idx]
                 else:
@@ -276,6 +286,7 @@ async def process_document(doc_id: int):
             except Exception as e:
                 logger.error(f"Failed to prepare elements for page {page['page_number']}: {e}")
                 page["_elements"] = []
+                page["_is_ordered"] = False
 
         # 用于跨页表格检测：记录前一页最后一个表格的特征
         prev_page_table_info = None
@@ -607,6 +618,7 @@ async def _parse_page(doc_id: int, page_info: dict, doc_dir: str,
     jpg_path = page_info["jpg_path"]
     single_pdf_path = page_info["single_pdf_path"]
     is_scanned = page_info["is_scanned"]
+    is_ordered = page_info.get("_is_ordered", True)
     elements = page_info.get("_elements", [])
     
     from backend.services.pdf_service import jpg_bbox_to_pdf_bbox, DEFAULT_DPI
@@ -673,9 +685,10 @@ async def _parse_page(doc_id: int, page_info: dict, doc_dir: str,
 
                 # Step C: 合并 Picture/Figure 和 OCR 解析结果，用 Surya 模型分配阅读顺序
                 all_elements = picture_elements + scanned_elements
-                all_elements = await asyncio.to_thread(
+                all_elements, surya_ok = await asyncio.to_thread(
                     assign_reading_order, all_elements, jpg_path
                 )
+                is_ordered = surya_ok
             else:
                 logger.info(f"Page {page_info['page_number']}: Using pre-processed elements ({len(all_elements)} elements)")
 
@@ -849,9 +862,9 @@ async def _parse_page(doc_id: int, page_info: dict, doc_dir: str,
                     saved_element_ids.append(None)
                     continue
 
-            await db.update_page(page_id, status="completed")
+            await db.update_page(page_id, status="completed", is_ordered=1 if is_ordered else 0)
             pdf_doc.close()
-            logger.info(f"Page {page_info['page_number']}: scanned parse done -> {len(all_elements)} elements: {element_count}")
+            logger.info(f"Page {page_info['page_number']}: scanned parse done -> {len(all_elements)} elements: {element_count}, ordered={'yes' if is_ordered else 'no'}")
             return (current_page_last_table_info, cross_page_group_counter)
 
         except Exception as e:
@@ -1201,8 +1214,8 @@ async def _parse_page(doc_id: int, page_info: dict, doc_dir: str,
                 prev_page_table_info["cross_page_group"] = result["cross_page_group"]
 
     pdf_doc.close()
-    await db.update_page(page_id, status="completed")
-    logger.info(f"Page {page_info['page_number']}: parsing completed")
+    await db.update_page(page_id, status="completed", is_ordered=1 if is_ordered else 0)
+    logger.info(f"Page {page_info['page_number']}: parsing completed, ordered={'yes' if is_ordered else 'no'}")
     
     return current_page_last_table_info, cross_page_group_counter
 

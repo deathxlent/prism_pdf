@@ -8,6 +8,55 @@ logger = logging.getLogger(__name__)
 
 _order_model = None
 _order_processor = None
+_surya_gpu_available = None
+
+
+def check_gpu_available_for_surya(min_free_vram_mb: int = 2048) -> bool:
+    """
+    Check if GPU has enough VRAM to load Surya model.
+    Should be called after YOLO is already loaded on GPU.
+    
+    Args:
+        min_free_vram_mb: Minimum free VRAM in MB required for Surya (default 2GB)
+    
+    Returns:
+        True if GPU has enough free VRAM, False otherwise
+    """
+    global _surya_gpu_available
+    if _surya_gpu_available is not None:
+        return _surya_gpu_available
+
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            _surya_gpu_available = False
+            logger.info("CUDA not available, Surya will use CPU or be skipped")
+            return False
+
+        free_vram = torch.cuda.mem_get_info()[0] / (1024 * 1024)
+        total_vram = torch.cuda.mem_get_info()[1] / (1024 * 1024)
+        logger.info(f"GPU VRAM: {free_vram:.0f}MB free / {total_vram:.0f}MB total")
+
+        if free_vram >= min_free_vram_mb:
+            _surya_gpu_available = True
+            logger.info(f"Enough VRAM ({free_vram:.0f}MB free >= {min_free_vram_mb}MB), Surya can load on GPU")
+        else:
+            _surya_gpu_available = False
+            logger.warning(f"Insufficient VRAM ({free_vram:.0f}MB free < {min_free_vram_mb}MB), Surya will be skipped")
+    except Exception as e:
+        _surya_gpu_available = False
+        logger.warning(f"Failed to check GPU VRAM: {e}, Surya will be skipped")
+
+    return _surya_gpu_available
+
+
+def is_surya_model_loaded() -> bool:
+    return _order_model is not None and _order_processor is not None
+
+
+def reset_surya_state():
+    global _surya_gpu_available
+    _surya_gpu_available = None
 
 
 def _download_surya_order_model() -> str:
@@ -57,6 +106,10 @@ def _get_ordering_model_and_processor():
     if _order_model is not None and _order_processor is not None:
         return _order_model, _order_processor
 
+    if _surya_gpu_available is False:
+        logger.info("Surya GPU not available (previously determined), skipping model load")
+        return None, None
+
     try:
         import os
         os.environ["HF_ENDPOINT"] = HF_MIRROR_URL
@@ -82,12 +135,15 @@ def _get_ordering_model_and_processor():
 
         device = "cpu"
         if SURYA_ORDER_DEVICE == "cuda" and torch.cuda.is_available():
-            device = "cuda"
-            logger.info(f"Loading Surya ordering model from {local_model_path} on CUDA...")
+            free_vram = torch.cuda.mem_get_info()[0] / (1024 * 1024)
+            if free_vram >= 2048:
+                device = "cuda"
+                logger.info(f"Loading Surya ordering model on CUDA (free VRAM: {free_vram:.0f}MB)...")
+            else:
+                logger.warning(f"Insufficient VRAM ({free_vram:.0f}MB free), loading Surya on CPU")
+                device = "cpu"
         else:
-            if SURYA_ORDER_DEVICE == "cuda":
-                logger.warning("CUDA not available, falling back to CPU for Surya ordering model")
-            logger.info(f"Loading Surya ordering model from {local_model_path} on CPU...")
+            logger.info(f"Loading Surya ordering model on CPU...")
 
         _order_model = order_load_model(checkpoint=local_model_path, device=device)
         _order_processor = order_load_processor(checkpoint=local_model_path)
@@ -126,15 +182,22 @@ def _fallback_reading_order(elements: list[dict]) -> list[dict]:
     return sorted_elements
 
 
-def assign_reading_order(elements: list[dict], image_path: str) -> list[dict]:
+def assign_reading_order(elements: list[dict], image_path: str) -> tuple[list[dict], bool]:
+    """
+    Assign reading order to elements using Surya model.
+    
+    Returns:
+        (elements, is_surya_ordered): elements with reading order, 
+        True if Surya was used, False if fallback was used
+    """
     if not elements:
-        return elements
+        return elements, True
 
     model, processor = _get_ordering_model_and_processor()
 
     if model is None or processor is None:
         logger.info("Using fallback reading order (top-to-bottom, left-to-right)")
-        return _fallback_reading_order(elements)
+        return _fallback_reading_order(elements), False
 
     try:
         from surya.ordering import batch_ordering
@@ -157,7 +220,7 @@ def assign_reading_order(elements: list[dict], image_path: str) -> list[dict]:
 
         if not ordering_results or not ordering_results[0].bboxes:
             logger.warning("Surya batch_ordering returned no results, using fallback")
-            return _fallback_reading_order(elements)
+            return _fallback_reading_order(elements), False
 
         surya_boxes = []
         for bbox_info in ordering_results[0].bboxes:
@@ -192,21 +255,28 @@ def assign_reading_order(elements: list[dict], image_path: str) -> list[dict]:
         for i, elem in enumerate(elements):
             elem["reading_order"] = i
 
-        return elements
+        return elements, True
 
     except Exception as e:
         logger.error(f"Surya batch_ordering failed: {e}, using fallback")
         import traceback
         logger.error(traceback.format_exc())
-        return _fallback_reading_order(elements)
+        return _fallback_reading_order(elements), False
 
 
-def assign_reading_order_batch(pages_elements: list[list[dict]], image_paths: list[str]) -> list[list[dict]]:
+def assign_reading_order_batch(pages_elements: list[list[dict]], image_paths: list[str]) -> tuple[list[list[dict]], list[bool]]:
+    """
+    Batch assign reading order to elements using Surya model.
+    
+    Returns:
+        (results, is_surya_ordered_list): results with reading order,
+        list of booleans indicating if Surya was used for each page
+    """
     model, processor = _get_ordering_model_and_processor()
 
     if model is None or processor is None:
         logger.info("Using fallback reading order for all pages")
-        return [_fallback_reading_order(elems) for elems in pages_elements]
+        return [_fallback_reading_order(elems) for elems in pages_elements], [False] * len(pages_elements)
 
     try:
         from surya.ordering import batch_ordering
@@ -239,11 +309,12 @@ def assign_reading_order_batch(pages_elements: list[list[dict]], image_paths: li
             valid_indices.append(idx)
 
         if not all_images:
-            return [_fallback_reading_order(elems) for elems in pages_elements]
+            return [_fallback_reading_order(elems) for elems in pages_elements], [False] * len(pages_elements)
 
         ordering_results = batch_ordering(all_images, all_bboxes, model, processor)
 
         result = [_fallback_reading_order(elems) for elems in pages_elements]
+        surya_ordered = [False] * len(pages_elements)
 
         for res_idx, page_idx in enumerate(valid_indices):
             if res_idx >= len(ordering_results) or not ordering_results[res_idx].bboxes:
@@ -283,11 +354,12 @@ def assign_reading_order_batch(pages_elements: list[list[dict]], image_paths: li
                 elem["reading_order"] = i
 
             result[page_idx] = elements
+            surya_ordered[page_idx] = True
 
-        return result
+        return result, surya_ordered
 
     except Exception as e:
         logger.error(f"Surya batch_ordering failed: {e}, using fallback")
         import traceback
         logger.error(traceback.format_exc())
-        return [_fallback_reading_order(elems) for elems in pages_elements]
+        return [_fallback_reading_order(elems) for elems in pages_elements], [False] * len(pages_elements)

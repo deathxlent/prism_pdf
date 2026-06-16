@@ -2,6 +2,8 @@ import os
 import uuid
 import asyncio
 import aiosqlite
+import zipfile
+import io
 from pathlib import Path
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse, Response, HTMLResponse
@@ -11,6 +13,7 @@ import re
 
 from backend.services.parse_service import process_upload, process_document, get_parse_results, get_parse_progress, TEXT_TYPES
 from backend.services.layout_service import get_raw_layout_data, generate_layout_annotation_image
+from backend.services.order_service import assign_reading_order, check_gpu_available_for_surya, reset_surya_state
 
 router = APIRouter(prefix="/api")
 
@@ -79,6 +82,7 @@ async def get_status(doc_id: int):
             "jpg_height": p["jpg_height"],
             "status": p["status"],
             "is_scanned": bool(p["is_scanned"]),
+            "is_ordered": bool(p.get("is_ordered", 1)),
             "jpg_path": p["jpg_path"],
             "single_pdf_path": p["single_pdf_path"],
         }
@@ -87,11 +91,14 @@ async def get_status(doc_id: int):
 
     progress = get_parse_progress(doc_id)
 
+    unordered_count = sum(1 for p in page_statuses if not p["is_ordered"])
+
     return {
         "document_id": doc_id,
         "status": doc["status"],
         "page_count": doc["page_count"],
         "pages": page_statuses,
+        "unordered_count": unordered_count,
         "progress": progress,
     }
 
@@ -209,10 +216,72 @@ async def reorder_elements(page_id: int, data: dict):
     return {"message": "Elements reordered", "page_id": page_id}
 
 
+@router.post("/pages/{page_id}/reorder")
+async def surya_reorder_page(page_id: int):
+    page = await db.get_page(page_id)
+    if not page:
+        raise HTTPException(status_code=404, detail="Page not found")
+
+    if page["status"] != "completed":
+        raise HTTPException(status_code=400, detail="Page must be completed before reordering")
+
+    jpg_path = page.get("jpg_path")
+    if not jpg_path or not Path(jpg_path).exists():
+        raise HTTPException(status_code=400, detail="Page image not found")
+
+    reset_surya_state()
+    gpu_ok = check_gpu_available_for_surya()
+    if not gpu_ok:
+        raise HTTPException(
+            status_code=503,
+            detail="GPU资源不足，无法加载Surya排序模型。请释放显存后重试。"
+        )
+
+    elements = await db.get_elements(page_id)
+    if not elements:
+        raise HTTPException(status_code=400, detail="No elements found on this page")
+
+    elem_dicts = []
+    for elem in elements:
+        elem_dicts.append({
+            "element_type": elem["element_type"],
+            "bbox": tuple(elem["bbox"]) if isinstance(elem["bbox"], (list, tuple)) else elem["bbox"],
+            "confidence": elem.get("confidence", 1.0),
+            "reading_order": elem.get("reading_order", 0),
+            "content": elem.get("content", ""),
+            "content_format": elem.get("content_format", ""),
+        })
+
+    reordered, surya_ok = await asyncio.to_thread(
+        assign_reading_order, elem_dicts, jpg_path
+    )
+
+    if not surya_ok:
+        raise HTTPException(
+            status_code=503,
+            detail="Surya排序模型加载失败，无法进行重排序。"
+        )
+
+    async with aiosqlite.connect(str(DB_PATH)) as conn:
+        for idx, elem in enumerate(reordered):
+            elem_id = elements[idx]["id"] if idx < len(elements) else None
+            if elem_id is not None:
+                await conn.execute(
+                    "UPDATE page_elements SET reading_order = ? WHERE id = ? AND page_id = ?",
+                    (elem["reading_order"], elem_id, page_id)
+                )
+        await db.update_page(page_id, is_ordered=1)
+        await conn.commit()
+
+    return {"message": "Page reordered with Surya", "page_id": page_id, "is_ordered": True}
+
+
 @router.get("/pages/{page_id}/elements")
 async def get_page_elements(page_id: int):
     elements = await db.get_elements(page_id)
-    return {"elements": elements}
+    page = await db.get_page(page_id)
+    is_ordered = bool(page.get("is_ordered", 1)) if page else True
+    return {"elements": elements, "is_ordered": is_ordered}
 
 
 @router.get("/documents/{doc_id}/thumbnail")
@@ -779,6 +848,104 @@ async def export_page_html(page_id: int):
         content=html_content,
         media_type="text/html; charset=utf-8",
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename.encode('utf-8').decode('latin-1')}"}
+    )
+
+
+def _generate_page_html(page: dict, doc: dict, elements: list) -> str:
+    html_parts = [
+        "<!DOCTYPE html>",
+        "<html lang='zh-CN'>",
+        "<head>",
+        "<meta charset='UTF-8'>",
+        f"<title>{doc['original_filename']} - 第 {page['page_number']} 页</title>",
+        "<style>",
+        "body { font-family: 'Microsoft YaHei', Arial, sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; line-height: 1.6; }",
+        "h1 { color: #333; border-bottom: 3px solid #007bff; padding-bottom: 10px; }",
+        "h2 { color: #555; margin-top: 20px; }",
+        "h3 { color: #666; }",
+        "table { border-collapse: collapse; width: 100%; margin: 10px 0; }",
+        "table, th, td { border: 1px solid #ddd; }",
+        "th, td { padding: 8px 12px; text-align: left; }",
+        "th { background-color: #f5f5f5; }",
+        "img { max-width: 100%; height: auto; margin: 10px 0; }",
+        "code { background-color: #f5f5f5; padding: 2px 6px; border-radius: 4px; font-family: Consolas, monospace; }",
+        ".page-header, .page-footer { color: #888; font-size: 0.9em; font-style: italic; }",
+        ".formula { text-align: center; font-size: 1.1em; margin: 15px 0; }",
+        ".caption { font-style: italic; color: #666; text-align: center; }",
+        "</style>",
+        "</head>",
+        "<body>",
+        f"<h1>第 {page['page_number']} 页</h1>",
+    ]
+
+    sorted_elements = sorted(elements, key=lambda e: e["reading_order"])
+
+    for elem in sorted_elements:
+        etype = elem["element_type"]
+        content = elem.get("content", "") or ""
+        content_format = elem.get("content_format", "") or ""
+
+        if etype == "Title":
+            html_parts.append(f"<h1 style='color: #dc143c;'>{content}</h1>")
+        elif etype == "Section-header":
+            html_parts.append(f"<h2>{content}</h2>")
+        elif etype == "Page-header":
+            html_parts.append(f"<div class='page-header'>{content}</div>")
+        elif etype == "Page-footer":
+            html_parts.append(f"<div class='page-footer'>{content}</div>")
+        elif etype == "Formula":
+            html_parts.append(f"<div class='formula'>{content}</div>")
+        elif etype == "Table":
+            if content_format == "html":
+                html_parts.append(content)
+            else:
+                html_parts.append(f"<pre>{content}</pre>")
+        elif etype == "Picture":
+            if content:
+                html_parts.append(f'<img src="file://{content}" alt="Picture">')
+        elif etype == "Caption":
+            html_parts.append(f"<div class='caption'>{content}</div>")
+        elif etype == "List-item":
+            html_parts.append(f"<li>{content}</li>")
+        elif etype in TEXT_TYPES:
+            if content.strip():
+                html_parts.append(f"<p>{content}</p>")
+        else:
+            if content.strip():
+                html_parts.append(f"<p>{content}</p>")
+
+    html_parts.append("</body></html>")
+    return "\n".join(html_parts)
+
+
+@router.get("/documents/{doc_id}/export/html-zip")
+async def export_document_html_zip(doc_id: int):
+    doc = await db.get_document(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    pages = await db.get_pages(doc_id)
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for page in pages:
+            if page["status"] != "completed":
+                continue
+            elements = await db.get_elements(page["id"])
+            if not elements:
+                continue
+            html_content = _generate_page_html(page, doc, elements)
+            page_num_str = str(page["page_number"]).zfill(3)
+            filename = f"page_{page_num_str}.html"
+            zf.writestr(filename, html_content)
+
+    zip_buffer.seek(0)
+    zip_filename = f"{Path(doc['original_filename']).stem}_pages_html.zip"
+
+    return Response(
+        content=zip_buffer.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{zip_filename.encode('utf-8').decode('latin-1')}"}
     )
 
 
