@@ -215,9 +215,10 @@ def _parse_structured_rows(raw_text: str) -> list[dict]:
     返回:
         行列表，每行包含:
             - cells: list[str] 单元格内容
+            - cell_tags: list[str] 每个单元格对应的标签类型 ('fcel'/'lcel')
             - is_ucel: bool 是否是跨行接续（第一列省略的接续行）
             - cell_count: int 有效单元格数量
-            - has_lcel: bool 是否包含 <lcel> 标签（通常表示非表格的长文本跨列）
+            - has_lcel: bool 是否包含 <lcel> 标签
             - raw: str 原始行文本
     """
     rows = []
@@ -230,6 +231,7 @@ def _parse_structured_rows(raw_text: str) -> list[dict]:
                 continue
             rows.append({
                 'cells': [line],
+                'cell_tags': ['text'],
                 'is_ucel': False,
                 'cell_count': 1,
                 'has_lcel': False,
@@ -248,6 +250,7 @@ def _parse_structured_rows(raw_text: str) -> list[dict]:
             part = part[len('<ucel>'):]
 
         cells = []
+        cell_tags = []
         remaining = part
         while '<fcel>' in remaining or '<lcel>' in remaining:
             # 找下一个 <fcel> 或 <lcel>
@@ -255,8 +258,10 @@ def _parse_structured_rows(raw_text: str) -> list[dict]:
             lcel_pos = remaining.find('<lcel>')
 
             if fcel_pos >= 0 and (lcel_pos == -1 or fcel_pos <= lcel_pos):
+                tag_type = 'fcel'
                 _, after = remaining.split('<fcel>', 1)
             else:
+                tag_type = 'lcel'
                 _, after = remaining.split('<lcel>', 1)
 
             # 找结束位置（下一个标签）
@@ -272,6 +277,7 @@ def _parse_structured_rows(raw_text: str) -> list[dict]:
             # 去除 HTML 标签残留
             content = re.sub(r'<[^>]+>', '', content).strip()
             cells.append(content)
+            cell_tags.append(tag_type)
             remaining = after[next_pos:]
 
         has_lcel = '<lcel>' in part
@@ -280,6 +286,7 @@ def _parse_structured_rows(raw_text: str) -> list[dict]:
 
         rows.append({
             'cells': cells if cells else [part],
+            'cell_tags': cell_tags if cells else [],
             'is_ucel': is_ucel,
             'cell_count': cell_count,
             'has_lcel': has_lcel,
@@ -474,6 +481,11 @@ def _blocks_to_elements(blocks: list[dict], page_w: int, page_h: int,
     """
     将块转换为元素，估算 bbox 坐标。
 
+    坐标估算策略:
+        使用内容感知的权重分配: 根据实际文本长度和行数决定每个块的高度，
+        而非均匀分布。表格块使用更宽的边距。
+        所有坐标均在 JPG 像素空间（与非扫描版 YOLO 检测一致）。
+    
     Args:
         blocks: 块列表
         page_w: 页面宽度（像素）
@@ -484,38 +496,61 @@ def _blocks_to_elements(blocks: list[dict], page_w: int, page_h: int,
     if table_force_no_header is None:
         table_force_no_header = {}
 
-    # 计算总行数（带权重）
-    total_weighted_lines = 0
+    # 计算内容权重: 文本用字符数/80估算行数，表格用行数+权重
+    total_weight = 0
+    block_weights = []
     for b in blocks:
         if b['type'] == 'table':
-            total_weighted_lines += b['line_count'] * 1.5 + 0.5
+            rows = b['rows']
+            # 表格: 行数*1.5 + 额外间距
+            weight = len(rows) * 1.5 + 0.8
         else:
-            total_weighted_lines += b['line_count']
+            rows = b['rows']
+            # 文本: 根据实际文本总长度估算行数
+            total_chars = 0
+            for r in rows:
+                for c in r.get('cells', []):
+                    total_chars += len(c)
+            # 假设每行约60字符
+            est_lines = max(len(rows), total_chars / 60.0)
+            weight = est_lines * 1.0 + 0.3
+        block_weights.append(weight)
+        total_weight += weight
 
-    margin_top = page_h * 0.05
-    margin_bottom = page_h * 0.05
+    # 页边距: 顶部留8%（页眉区域），底部留6%（页脚区域）
+    margin_top = page_h * 0.08
+    margin_bottom = page_h * 0.06
     usable_h = page_h - margin_top - margin_bottom
-    line_h = usable_h / max(total_weighted_lines, 1)
+    # 预留块间间距 (每个块之间1%页高)
+    inter_block_gap = page_h * 0.01
+    total_gaps = inter_block_gap * (len(blocks) - 1) if len(blocks) > 1 else 0
+    usable_h_for_content = usable_h - total_gaps
+    # 每单位权重的像素高度
+    pixel_per_weight = usable_h_for_content / max(total_weight, 0.01)
 
-    margin_x = page_w * 0.05
-    text_x0 = margin_x
-    text_x1 = page_w - margin_x
-    table_x0 = page_w * 0.02
-    table_x1 = page_w - page_w * 0.02
+    # 横向边距: 文本使用8%，表格使用3%
+    text_margin_ratio = 0.08
+    table_margin_ratio = 0.03
+    text_x0 = page_w * text_margin_ratio
+    text_x1 = page_w - page_w * text_margin_ratio
+    table_x0 = page_w * table_margin_ratio
+    table_x1 = page_w - page_w * table_margin_ratio
 
     current_y = margin_top
     table_block_idx = 0
 
-    for block in blocks:
+    for bi, block in enumerate(blocks):
         block_type = block['type']
         rows = block['rows']
+
+        block_h = block_weights[bi] * pixel_per_weight
+        block_h = max(block_h, page_h * 0.02)  # 最小高度
 
         if block_type == 'table':
             force_hdr = table_force_no_header.get(table_block_idx, False)
             html, rows_count, cols_count = _table_rows_to_html(rows, force_no_header=force_hdr)
             table_block_idx += 1
 
-            block_h = line_h * (len(rows) * 1.5 + 0.5)
             bbox = (table_x0, current_y, table_x1, current_y + block_h)
 
             if html and rows_count >= 2:
@@ -539,12 +574,8 @@ def _blocks_to_elements(blocks: list[dict], page_w: int, page_h: int,
                     'content': plain,
                     'content_format': 'markdown',
                 })
-
-            current_y += block_h
-
         else:
             plain = _rows_to_plain_text(rows)
-            block_h = line_h * len(rows) * 1.2
             bbox = (text_x0, current_y, text_x1, current_y + block_h)
             elements.append({
                 'element_type': 'Text',
@@ -554,9 +585,8 @@ def _blocks_to_elements(blocks: list[dict], page_w: int, page_h: int,
                 'content': plain,
                 'content_format': 'markdown',
             })
-            current_y += block_h
 
-        current_y += line_h * 0.3
+        current_y += block_h + inter_block_gap
 
     return elements
 
@@ -566,78 +596,130 @@ def _table_rows_to_html(rows: list[dict], force_no_header: bool = False) -> tupl
     将表格行数据转换为带 rowspan/colspan 的 HTML。
 
     处理逻辑:
-        1. 先计算最大列数
+        1. 先计算最大列数（fcel=1列，lcel=根据最大列数计算跨度）
         2. 第一行为表头（除非 force_no_header=True）
         3. ucel 标记的行: 第一列是跨行（从最近的非 ucel 行延伸下来）
-        4. 跨行用 <td rowspan='N'> 实现
+        4. lcel 标记的单元格: 具有 colspan（跨越到行末或下一个 fcel 边界）
+        5. 跨行用 <td rowspan='N'> 实现
     """
     if len(rows) < 2:
         return "", 0, 0
 
-    # Step 1: 计算最大列数
+    nrows = len(rows)
+
+    # Step 1: 确定基础列数
+    # 非 ucel 行的列数 = 实际单元格数（fcel和lcel都算1个视觉位置）
+    # ucel 行的列数 = 额外+1（被合并的第一列）
     max_cols = 0
     for r in rows:
-        ncells = len(r['cells'])
         if r['is_ucel']:
-            ncells_actual = max(ncells + 1, ncells)
-            max_cols = max(max_cols, ncells_actual)
+            max_cols = max(max_cols, len(r['cells']) + 1)
         else:
-            max_cols = max(max_cols, ncells)
+            max_cols = max(max_cols, len(r['cells']))
 
     if max_cols < 2:
         return "", 0, 0
 
-    # Step 2: 构建 rowspan 映射
-    covered = [[False] * max_cols for _ in range(len(rows))]
-    real_rowspan = [[1] * max_cols for _ in range(len(rows))]
+    # Step 2: 构建行列跨度的记录矩阵
+    covered = [[False] * max_cols for _ in range(nrows)]
+    real_rowspan = [[1] * max_cols for _ in range(nrows)]
+    real_colspan = [[1] * max_cols for _ in range(nrows)]
 
-    for ri in range(len(rows)):
+    # Step 3: 处理 ucel 行 → rowspan（第一列的纵向合并）
+    for ri in range(nrows):
         r = rows[ri]
-        if r['is_ucel']:
-            start_r = ri - 1
-            while start_r >= 0 and rows[start_r]['is_ucel']:
-                start_r -= 1
+        if not r['is_ucel']:
+            continue
+        # 找到当前 ucel 连续块的开头行（第一个非 ucel 行）
+        start_r = ri - 1
+        while start_r >= 0 and rows[start_r]['is_ucel']:
+            start_r -= 1
+        if start_r >= 0:
+            # 计算从 start_r 到最后一个连续 ucel 行的跨度
+            end_r = ri
+            while end_r + 1 < nrows and rows[end_r + 1]['is_ucel']:
+                end_r += 1
+            span_len = end_r - start_r + 1
+            real_rowspan[start_r][0] = max(real_rowspan[start_r][0], span_len)
+            # 标记所有 ucel 行的第一列为 covered
+            for ur in range(start_r + 1, end_r + 1):
+                covered[ur][0] = True
 
-            if start_r >= 0:
-                span_len = ri - start_r + 1
-                end_r = ri
-                while end_r + 1 < len(rows) and rows[end_r + 1]['is_ucel']:
-                    end_r += 1
-                    span_len = end_r - start_r + 1
-
-                covered[ri][0] = True
-                real_rowspan[start_r][0] = max(real_rowspan[start_r][0], span_len)
-
-    # Step 3: 生成 HTML
-    html_parts = ["<table border='1' cellpadding='4' cellspacing='0'>"]
-    for ri, r in enumerate(rows):
+    # Step 4: 处理 lcel 单元格 → colspan
+    for ri in range(nrows):
+        r = rows[ri]
         cells = list(r['cells'])
-
+        tags = list(r.get('cell_tags', []))
         if r['is_ucel']:
+            # ucel 行: 第一列为空（被上一行覆盖），后续单元格从第1列开始
             cells = [''] + cells
-
+            tags = ['covered'] + tags
+        # 补齐到 max_cols
         while len(cells) < max_cols:
             cells.append('')
+            tags.append('')
+
+        ci = 0
+        for cell_idx in range(len(cells)):
+            # 跳过已被覆盖的位置
+            while ci < max_cols and covered[ri][ci]:
+                ci += 1
+            if ci >= max_cols:
+                break
+
+            tag_type = tags[cell_idx] if cell_idx < len(tags) else ''
+
+            if tag_type == 'lcel':
+                # lcel 表示跨列内容: 跨越到行末的所有剩余列
+                cs = max_cols - ci
+                real_colspan[ri][ci] = max(1, cs)
+
+            # 标记被当前单元格覆盖的区域
+            cs = real_colspan[ri][ci]
+            rs = real_rowspan[ri][ci]
+            for r2 in range(ri, min(ri + rs, nrows)):
+                for c2 in range(ci, min(ci + cs, max_cols)):
+                    if r2 != ri or c2 != ci:
+                        covered[r2][c2] = True
+            ci += cs
+
+    # Step 5: 生成 HTML
+    html_parts = ["<table border='1' cellpadding='4' cellspacing='0'>"]
+    for ri in range(nrows):
+        r = rows[ri]
+        cells = list(r['cells'])
+        tags = list(r.get('cell_tags', []))
+        if r['is_ucel']:
+            cells = [''] + cells
+            tags = ['covered'] + tags
+        while len(cells) < max_cols:
+            cells.append('')
+            tags.append('')
 
         is_header = (not force_no_header) and (ri == 0 and not r['is_ucel'])
         html_parts.append("  <tr>")
 
-        for ci in range(max_cols):
+        ci = 0
+        while ci < max_cols:
             if covered[ri][ci]:
+                ci += 1
                 continue
 
             tag = "th" if is_header else "td"
             content = escape(cells[ci]) if ci < len(cells) else ''
-
             attrs = ""
             if real_rowspan[ri][ci] > 1:
                 attrs += f" rowspan='{real_rowspan[ri][ci]}'"
+            if real_colspan[ri][ci] > 1:
+                attrs += f" colspan='{real_colspan[ri][ci]}'"
 
             html_parts.append(f"    <{tag}{attrs}>{content}</{tag}>")
+            ci += real_colspan[ri][ci]
+
         html_parts.append("  </tr>")
 
     html_parts.append("</table>")
-    return "\n".join(html_parts), len(rows), max_cols
+    return "\n".join(html_parts), nrows, max_cols
 
 
 def _rows_to_plain_text(rows: list[dict]) -> str:

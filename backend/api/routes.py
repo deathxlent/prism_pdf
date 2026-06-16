@@ -326,27 +326,247 @@ async def get_page_layout_annotation(page_id: int):
         raise HTTPException(status_code=500, detail=f"Failed to generate annotation image: {str(e)}")
 
 
-def _extract_table_rows(html: str) -> list[str]:
+def _parse_html_table_to_matrix(html: str) -> list[list[dict]]:
+    """
+    解析 HTML 表格为二维单元格矩阵用于合并操作。
+    
+    与 parse_service._parse_html_table() 相同逻辑，但独立实现避免循环引用。
+    每个单元格: {content, is_header, rowspan, colspan} 或 None (被覆盖)
+    """
     if not html:
         return []
-    tr_pattern = re.compile(r'<tr[^>]*>.*?</tr>', re.DOTALL | re.IGNORECASE)
-    return tr_pattern.findall(html)
+    from html import unescape
+    rows_match = re.findall(r'<tr[^>]*>(.*?)</tr>', html, re.DOTALL | re.IGNORECASE)
+    if not rows_match:
+        return []
+    
+    temp_matrix = []
+    max_cols = 0
+    for row_html in rows_match:
+        cells_match = re.findall(r'<(t[dh])[^>]*>(.*?)</\1>', row_html, re.DOTALL | re.IGNORECASE)
+        row_cells = []
+        for tag, cell_html in cells_match:
+            tag = tag.lower()
+            is_header = tag == 'th'
+            rs_match = re.search(r"rowspan\s*=\s*['\"]?(\d+)", cell_html, re.IGNORECASE)
+            rowspan = int(rs_match.group(1)) if rs_match else 1
+            cs_match = re.search(r"colspan\s*=\s*['\"]?(\d+)", cell_html, re.IGNORECASE)
+            colspan = int(cs_match.group(1)) if cs_match else 1
+            content = re.sub(r'<[^>]+>', '', cell_html).strip()
+            content = unescape(content)
+            row_cells.append({
+                'content': content,
+                'is_header': is_header,
+                'rowspan': rowspan,
+                'colspan': colspan,
+            })
+        if row_cells:
+            temp_matrix.append(row_cells)
+            row_col_count = sum(c['colspan'] for c in row_cells)
+            max_cols = max(max_cols, row_col_count)
+    
+    if not temp_matrix:
+        return []
+    
+    full_matrix = [[None for _ in range(max_cols)] for _ in range(len(temp_matrix))]
+    covered = [[False for _ in range(max_cols)] for _ in range(len(temp_matrix))]
+    for ri, row_cells in enumerate(temp_matrix):
+        col_pos = 0
+        for cell in row_cells:
+            while col_pos < max_cols and covered[ri][col_pos]:
+                col_pos += 1
+            if col_pos >= max_cols:
+                break
+            full_matrix[ri][col_pos] = {
+                'content': cell['content'],
+                'is_header': cell['is_header'],
+                'rowspan': cell['rowspan'],
+                'colspan': cell['colspan'],
+            }
+            for r in range(ri, min(ri + cell['rowspan'], len(temp_matrix))):
+                for c in range(col_pos, min(col_pos + cell['colspan'], max_cols)):
+                    if r != ri or c != col_pos:
+                        covered[r][c] = True
+            col_pos += cell['colspan']
+    return full_matrix
+
+
+def _matrix_to_html(matrix: list[list[dict]]) -> str:
+    """将单元格矩阵转换回 HTML 表格字符串。"""
+    if not matrix:
+        return ""
+    rows = len(matrix)
+    cols = len(matrix[0]) if rows > 0 else 0
+    if rows == 0 or cols == 0:
+        return ""
+    
+    from html import escape
+    covered = [[False for _ in range(cols)] for _ in range(rows)]
+    html_parts = ["<table border='1' cellpadding='4' cellspacing='0'>"]
+    for ri in range(rows):
+        html_parts.append("  <tr>")
+        for ci in range(cols):
+            if covered[ri][ci]:
+                continue
+            cell = matrix[ri][ci]
+            if cell is None:
+                continue
+            tag = "th" if cell.get('is_header', False) else "td"
+            rowspan = cell.get('rowspan', 1)
+            colspan = cell.get('colspan', 1)
+            content = escape(cell.get('content', ''))
+            attrs = ""
+            if rowspan > 1:
+                attrs += f" rowspan='{rowspan}'"
+            if colspan > 1:
+                attrs += f" colspan='{colspan}'"
+            html_parts.append(f"    <{tag}{attrs}>{content}</{tag}>")
+            for r in range(ri, min(ri + rowspan, rows)):
+                for c in range(ci, min(ci + colspan, cols)):
+                    if r != ri or c != ci:
+                        covered[r][c] = True
+        html_parts.append("  </tr>")
+    html_parts.append("</table>")
+    return "\n".join(html_parts)
 
 
 def _build_merged_table(first_html: str, continuation_htmls: list[str]) -> str:
-    rows = _extract_table_rows(first_html)
-    for cont_html in continuation_htmls:
-        cont_rows = _extract_table_rows(cont_html)
-        if cont_rows:
-            rows.extend(cont_rows)
-
-    if not rows:
+    """
+    合并跨页表格，处理空单元格吸收和 colspan/rowspan 更新。
+    
+    策略:
+    1. 将第一页表格解析为单元格矩阵
+    2. 对每个续页表格:
+       a. 解析为单元格矩阵
+       b. 如果续页首行有空单元格，将它们吸收到累积矩阵的最后一行（扩展 rowspan）
+       c. 如果首行所有单元格都被吸收，删除该行
+       d. 将剩余行追加到累积矩阵
+    3. 将最终矩阵转回 HTML
+    """
+    if not first_html:
+        return ""
+    
+    # 解析第一页
+    acc_matrix = _parse_html_table_to_matrix(first_html)
+    if not acc_matrix:
         return first_html
-
-    return "<table border='1' cellpadding='4' cellspacing='0'>\n" + "\n".join(rows) + "\n</table>"
+    
+    for cont_html in continuation_htmls:
+        if not cont_html:
+            continue
+        cont_matrix = _parse_html_table_to_matrix(cont_html)
+        if not cont_matrix:
+            continue
+        
+        acc_cols = len(acc_matrix[0]) if acc_matrix else 0
+        cont_cols = len(cont_matrix[0]) if cont_matrix else 0
+        max_cols = max(acc_cols, cont_cols)
+        
+        # 确保累积矩阵列数足够
+        for row in acc_matrix:
+            while len(row) < max_cols:
+                row.append(None)
+        for row in cont_matrix:
+            while len(row) < max_cols:
+                row.append(None)
+        
+        # 检查续页第一行是否有空单元格
+        first_cont_row = cont_matrix[0]
+        empty_cols = []
+        for ci in range(max_cols):
+            if ci < len(first_cont_row):
+                cell = first_cont_row[ci]
+                if cell is None:
+                    continue
+                content = cell.get('content', '').strip()
+                if not content:
+                    empty_cols.append(ci)
+        
+        if empty_cols:
+            # 将续页第一行的空单元格吸收到累积矩阵最后一行
+            last_acc_row = acc_matrix[-1]
+            for ci in empty_cols:
+                # 找到累积矩阵最后一行中对应位置的单元格（或向左找到最近的非空单元格）
+                target_ci = ci
+                while target_ci >= 0 and (target_ci >= len(last_acc_row) or last_acc_row[target_ci] is None):
+                    target_ci -= 1
+                if target_ci >= 0 and target_ci < len(last_acc_row) and last_acc_row[target_ci] is not None:
+                    existing_rs = last_acc_row[target_ci].get('rowspan', 1)
+                    last_acc_row[target_ci]['rowspan'] = existing_rs + 1
+            
+            # 如果连续多列为空，合并 colspan
+            # 注意：只有在该范围内的所有列在上一行中都是 None（已被现有 colspan 覆盖）时，
+            # 才扩展 colspan。如果范围内有独立内容的单元格（如 [C, D] + cont [empty, E]），
+            # 则不应扩展 colspan，否则会覆盖独立单元格的内容（D 消失）。
+            first_non_empty_col = None
+            for ci in range(max_cols):
+                if ci >= len(first_cont_row):
+                    break
+                cell = first_cont_row[ci]
+                if cell and cell.get('content', '').strip():
+                    first_non_empty_col = ci
+                    break
+            
+            if empty_cols and first_non_empty_col is not None and first_non_empty_col > 0:
+                all_covered_by_colspan = True
+                for ci in range(1, first_non_empty_col):
+                    if (ci < len(last_acc_row) and last_acc_row[ci] is not None
+                            and last_acc_row[ci].get('content', '').strip()):
+                        all_covered_by_colspan = False
+                        break
+                
+                if all_covered_by_colspan:
+                    leftmost_target = None
+                    for ci in range(first_non_empty_col):
+                        if ci < len(last_acc_row) and last_acc_row[ci] and last_acc_row[ci].get('content', '').strip():
+                            leftmost_target = ci
+                            break
+                    if leftmost_target is None:
+                        leftmost_target = 0
+                    if leftmost_target < len(last_acc_row) and last_acc_row[leftmost_target]:
+                        total_empty_cols = first_non_empty_col - leftmost_target
+                        existing_cs = last_acc_row[leftmost_target].get('colspan', 1)
+                        last_acc_row[leftmost_target]['colspan'] = existing_cs + total_empty_cols
+                        for ci in range(leftmost_target + 1, first_non_empty_col):
+                            if ci < len(last_acc_row):
+                                last_acc_row[ci] = None
+        
+        # 构建新的续页矩阵: 首行的空单元格被吸收后置 None，非空单元格保留
+        new_cont_rows = []
+        for ri, row in enumerate(cont_matrix):
+            if ri == 0:
+                # 首行: 空单元格被吸收，非空单元格保留为正常行
+                new_row = []
+                all_absorbed = True
+                for ci, cell in enumerate(row):
+                    if cell is None:
+                        new_row.append(None)
+                        continue
+                    if ci in empty_cols:
+                        new_row.append(None)  # 已被吸收
+                    else:
+                        new_row.append(cell.copy() if cell else None)
+                        all_absorbed = False
+                if not all_absorbed:
+                    # 至少还有非空单元格，保留该行（只保留非吸收的单元格）
+                    new_cont_rows.append(new_row)
+                # 如果所有单元格都被吸收，跳过该行
+            else:
+                new_cont_rows.append([c.copy() if c else None for c in row])
+        
+        # 将处理后的续页行追加到累积矩阵
+        if new_cont_rows:
+            acc_matrix.extend(new_cont_rows)
+    
+    # 转换最终矩阵为 HTML
+    return _matrix_to_html(acc_matrix)
 
 
 def _merge_cross_page_tables(pages: list[dict]) -> list[dict]:
+    """
+    合并跨页表格组，更新首元素的内容为合并后的 HTML，
+    同时标记被合并的组以便在导出时跳过非首元素。
+    """
     group_tables = {}
     for page in pages:
         for elem in page["elements"]:

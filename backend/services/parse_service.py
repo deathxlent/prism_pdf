@@ -474,26 +474,38 @@ def _merge_cross_page_empty_cells(prev_html: str, curr_html: str) -> tuple[str, 
                 new_prev_matrix[-1][target_ci]['rowspan'] = existing_rs + 1
     
     # 如果连续多个空列，需要合并到最左边非空单元格的 colspan
-    if empty_cols_in_first_row and first_non_empty_col is not None and first_non_empty_col > 0:
-        leftmost_target = None
-        for ci in range(first_non_empty_col):
-            if ci < len(prev_last_row) and prev_last_row[ci] and prev_last_row[ci].get('content', '').strip():
-                leftmost_target = ci
+    # 注意：只有在该范围内的所有列在上一行中都是 None（已被现有 colspan 覆盖）时，
+    # 才扩展 colspan。如果范围内有独立内容的单元格（如 [C, D] + cont [empty, E]），
+    # 则不应扩展 colspan，否则会覆盖独立单元格的内容（D 消失）。
+    if (empty_cols_in_first_row and first_non_empty_col is not None and first_non_empty_col > 0):
+        # 检查范围内是否所有列在 prev_last_row 中都是 None（已被 colspan 覆盖）
+        all_covered_by_colspan = True
+        for ci in range(1, first_non_empty_col):
+            if (ci < len(prev_last_row) and prev_last_row[ci] is not None
+                    and prev_last_row[ci].get('content', '').strip()):
+                all_covered_by_colspan = False
                 break
         
-        if leftmost_target is None:
-            leftmost_target = 0
-        
-        # 增加这个单元格的 colspan 以覆盖所有空列
-        if new_prev_matrix[-1][leftmost_target]:
-            total_empty_cols = first_non_empty_col - leftmost_target
-            existing_cs = new_prev_matrix[-1][leftmost_target].get('colspan', 1)
-            new_prev_matrix[-1][leftmost_target]['colspan'] = existing_cs + total_empty_cols
+        if all_covered_by_colspan:
+            leftmost_target = None
+            for ci in range(first_non_empty_col):
+                if ci < len(prev_last_row) and prev_last_row[ci] and prev_last_row[ci].get('content', '').strip():
+                    leftmost_target = ci
+                    break
             
-            # 标记被覆盖的空列位置为 None（在 prev 最后一行中）
-            for ci in range(leftmost_target + 1, first_non_empty_col):
-                if ci < len(new_prev_matrix[-1]):
-                    new_prev_matrix[-1][ci] = None
+            if leftmost_target is None:
+                leftmost_target = 0
+            
+            # 增加这个单元格的 colspan 以覆盖所有空列
+            if new_prev_matrix[-1][leftmost_target]:
+                total_empty_cols = first_non_empty_col - leftmost_target
+                existing_cs = new_prev_matrix[-1][leftmost_target].get('colspan', 1)
+                new_prev_matrix[-1][leftmost_target]['colspan'] = existing_cs + total_empty_cols
+                
+                # 标记被覆盖的空列位置为 None（在 prev 最后一行中）
+                for ci in range(leftmost_target + 1, first_non_empty_col):
+                    if ci < len(new_prev_matrix[-1]):
+                        new_prev_matrix[-1][ci] = None
     
     # 构建新的 curr_matrix：移除第一行中被合并的空单元格（它们将从 prev 延伸）
     new_curr_matrix = []
@@ -587,15 +599,11 @@ async def _parse_page(doc_id: int, page_info: dict, doc_dir: str,
                 parse_scanned_page_full, jpg_path, jpg_w, jpg_h
             )
 
-            # Step C: 合并 Picture/Figure 和 OCR 解析结果，按 bbox 坐标排序
+            # Step C: 合并 Picture/Figure 和 OCR 解析结果，用 Surya 模型分配阅读顺序
             all_elements = picture_elements + scanned_elements
-            # 阅读顺序: 先按 y0 排，再按 x0 排
-            all_elements.sort(key=lambda e: (
-                e["bbox"][1] / (jpg_h * 0.05),  # y 方向 5% 容差内视为同一行
-                e["bbox"][0]
-            ))
-            for i, elem in enumerate(all_elements):
-                elem["reading_order"] = i
+            all_elements = await asyncio.to_thread(
+                assign_reading_order, all_elements, jpg_path
+            )
 
             element_count = {
                 "Text": 0, "Section-header": 0, "Title": 0, "Table": 0,
