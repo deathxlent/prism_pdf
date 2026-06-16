@@ -448,15 +448,14 @@ function renderThumbnails() {
     const container = $('#thumbs-list');
     container.innerHTML = currentPages.map((page, idx) => {
         const imgSrc = page.jpg_path ? `${API}/api/file/${encodeURIComponent(page.jpg_path)}` : null;
-        const unorderedClass = page.is_ordered === false ? ' unordered' : '';
 
         return `
-            <div class="thumb-item ${idx === currentPageIndex ? 'active' : ''}${unorderedClass}" data-index="${idx}" data-page-id="${page.id}" onclick="loadPage(${idx})">
+            <div class="thumb-item ${idx === currentPageIndex ? 'active' : ''}" data-index="${idx}" onclick="loadPage(${idx})">
                 ${imgSrc ? 
                     `<img src="${imgSrc}" alt="第 ${page.page_number} 页" onerror="this.outerHTML='<div class=\\'thumb-placeholder\\'>第 ${page.page_number} 页</div>'">` :
                     `<div class="thumb-placeholder">第 ${page.page_number} 页</div>`
                 }
-                <div class="thumb-page-num">P. ${page.page_number}${page.is_ordered === false ? ' ⚠' : ''}</div>
+                <div class="thumb-page-num">P. ${page.page_number}</div>
             </div>
         `;
     }).join('');
@@ -1341,62 +1340,6 @@ function exportCurrentPagePdf() {
         a.click();
     } catch (e) {
         alert('导出失败: ' + e.message);
-    }
-}
-
-async function resortCurrentPage() {
-    if (!currentPageData) return;
-
-    const resortBtn = $('#resort-btn');
-    const originalText = resortBtn.innerHTML;
-    resortBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 排序中...';
-    resortBtn.disabled = true;
-
-    try {
-        const res = await fetch(`${API}/api/pages/${currentPageData.id}/resort`, { method: 'POST' });
-        if (!res.ok) {
-            const err = await res.json();
-            throw new Error(err.detail || '重排序失败');
-        }
-        const data = await res.json();
-        currentElements = data.elements;
-        renderElements(currentElements);
-        if (data.is_ordered) {
-            const pageItem = document.querySelector(`.thumb-item[data-page-id="${currentPageData.id}"]`);
-            if (pageItem) {
-                pageItem.classList.remove('unordered');
-            }
-        }
-        alert('重排序完成');
-    } catch (e) {
-        alert('重排序失败: ' + e.message);
-    } finally {
-        resortBtn.innerHTML = originalText;
-        resortBtn.disabled = false;
-    }
-}
-
-function exportDocumentHtmlZip() {
-    if (!currentDocId) return;
-
-    const exportBtn = $('#export-htmlzip-btn');
-    const originalText = exportBtn.innerHTML;
-    exportBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 打包中...';
-    exportBtn.disabled = true;
-
-    try {
-        const url = `${API}/api/documents/${currentDocId}/export/html-zip`;
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = '';
-        a.click();
-    } catch (e) {
-        alert('导出失败: ' + e.message);
-    } finally {
-        setTimeout(() => {
-            exportBtn.innerHTML = originalText;
-            exportBtn.disabled = false;
-        }, 1500);
     }
 }
 

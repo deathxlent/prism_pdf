@@ -105,66 +105,52 @@ prepare_pages() [pdf_service.py:134]
     │       └─ 返回 is_scanned 标记
     │
     ▼
-create_page() → 为每页创建数据库记录（含 is_scanned 标记）
+create_page() → 为每页创建数据库记录
     │
     ▼
 更新文档状态为 pages_ready
 ```
 
-### 阶段 2：模型加载与 VRAM 管理 (30% - 35%)
+### 阶段 2：批量布局检测 (30% - 50%)
 
 ```
-加载 YOLO 模型到显存
-    ├─ _get_model() [layout_service.py:197]
-    ├─ 检测 CUDA 可用性
-    └─ 加载到 GPU（或 CPU fallback）
+detect_layout_batch() [layout_service.py:289]
+    ├─ 首次调用时下载/加载 YOLO26m 模型
+    │   ├─ 从 HuggingFace 下载 yolo26m_doc_layout.pt
+    │   └─ 支持 CUDA 加速（如果可用）
     │
-    ▼
-检查 VRAM 剩余资源
-    ├─ check_vram_available() [order_service.py:15]
-    ├─ 默认需要 ≥ 800MB 空闲显存
+    ├─ 批量推理所有页面图片 (imgsz=1280)
     │
-    ├─ 显存充足 → 加载 Surya 排序模型
-    │   ├─ _get_ordering_model_and_processor()
-    │   ├─ 加载到 CUDA（或 CPU fallback）
-    │   └─ surya_available = True
+    ├─ 解析检测结果：
+    │   ├─ 11 类元素：Title, Section-header, Text, List-item,
+    │   │             Table, Picture, Formula, Caption, Footnote,
+    │   │             Page-header, Page-footer
+    │   ├─ 每个检测结果包含：bbox, confidence, class_id
+    │   └─ 保存原始检测数据用于调试
     │
-    └─ 显存不足 → 跳过 Surya 加载
-        ├─ 记录警告日志
-        └─ surya_available = False
-           （所有页面将使用 fallback 排序，标记 is_ordered=0）
+    └─ remove_overlapping_elements() → 过滤重叠元素
+        ├─ 计算 IoU (交并比)
+        ├─ 包含关系处理：保留大的、非 Text 的
+        ├─ 重叠处理：非 Text 优先于 Text
+        └─ 同类型：保留 confidence 高的
 ```
 
-### 阶段 3：按类型批量处理 (35% - 55%)
+### 阶段 3：阅读顺序排序 (50% - 55%)
 
 ```
-将页面分为扫描页和非扫描页两类：
-
-┌─── 非扫描页（YOLO + Surya 流程）───────────────────────────────────┐
-│                                                                     │
-│  detect_layout_batch() [layout_service.py:308]                     │
-│      ├─ 批量推理所有非扫描页图片                                    │
-│      ├─ 11 类元素检测 + 重叠过滤                                    │
-│      └─ 返回每页元素列表（含 bbox, confidence）                     │
-│                                                                     │
-│  assign_reading_order_batch() [order_service.py:203]                │
-│      ├─ 若 surya_available → Surya 模型批量排序                     │
-│      └─ 否则 → _fallback_reading_order() 坐标排序                   │
-│           （标记这些页面 is_ordered=0）                               │
-│                                                                     │
-└─────────────────────────────────────────────────────────────────────┘
-
-┌─── 扫描页（PaddleOCR-VL + Surya 流程）────────────────────────────┐
-│                                                                     │
-│  扫描页在 _parse_page() 阶段处理：                                  │
-│      ├─ Step A: YOLO 检测 Picture/Figure 元素                       │
-│      ├─ Step B: PaddleOCR-VL 全页 Table Recognition 解析             │
-│      ├─ Step C: 合并 Picture + OCR 结果                             │
-│      │   ├─ 若 surya_available → Surya 模型排序 (is_ordered=1)      │
-│      │   └─ 否则 → fallback 坐标排序 (is_ordered=0)                 │
-│      └─ 保存元素到数据库                                            │
-│                                                                     │
-└─────────────────────────────────────────────────────────────────────┘
+assign_reading_order_batch() [order_service.py:195]
+    ├─ 加载 Surya Order 模型（首次调用自动下载）
+    │
+    ├─ batch_ordering() → 批量处理所有页面
+    │   └─ Surya 模型输出每个 bbox 的阅读顺序 position
+    │
+    ├─ 匹配 YOLO 检测框与 Surya 结果
+    │   └─ 使用 IoU 匹配，找到最接近的阅读顺序
+    │
+    ├─ 失败降级：fallback 排序
+    │   └─ 按 bbox 的 y1, x1 坐标排序（从上到下，从左到右）
+    │
+    └─ 重新编号 reading_order 从 0 开始
 ```
 
 ### 阶段 4：逐页内容解析 (55% - 95%)
@@ -210,7 +196,6 @@ create_page() → 为每页创建数据库记录（含 is_scanned 标记）
 │   └─ 保留内容更长的版本
 │
 └─ 批量写入数据库 create_element()
-    └─ 更新 is_ordered 标记
 ```
 
 ### 阶段 5：完成 (95% - 100%)
@@ -226,10 +211,6 @@ create_page() → 为每页创建数据库记录（含 is_scanned 标记）
     │
     ▼
 用户可查看、编辑、导出结果
-    │
-    ├─ 未排序页面（is_ordered=0）显示"重排序"按钮
-    └─ 点击"重排序"→ POST /api/pages/{page_id}/resort
-        └─ 使用 Surya 模型重新排序该页元素
 ```
 
 ## 四、表格提取详细流程
@@ -315,7 +296,7 @@ _parse_fcel_structured_to_html() → 解析标签：
     │   └─ 回溯更新前一表格的 cross_page_group
     │
     └─ 导出时合并：
-        export_document_html() [routes.py]
+        export_document_html() [routes.py:377]
         └─ _merge_cross_page_tables()
             ├─ 按 cross_page_group 分组
             ├─ 提取所有 <tr> 行
@@ -323,8 +304,6 @@ _parse_fcel_structured_to_html() → 解析标签：
 ```
 
 ## 六、OCR 服务调用流程 (ocr_service_vl.py)
-
-### 6.1 调用流程
 
 ```
 ocr_region(image_path, bbox)
@@ -336,7 +315,19 @@ _crop_and_save_image() → 裁剪 bbox 区域为临时 PNG
 _call_llama_server("OCR:", tmp_path)
     ├─ 图片 base64 编码
     ├─ 发送到 http://127.0.0.1:8080/v1/chat/completions
-    ├─ 请求体格式（OpenAI Chat Completions 兼容）
+    ├─ 请求体格式（OpenAI 兼容）：
+    │   {
+    │     "model": "PaddleOCR-VL-1.6.Q4_K_M.gguf",
+    │     "messages": [{
+    │       "role": "user",
+    │       "content": [
+    │         {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,..."}},
+    │         {"type": "text", "text": "OCR:"}
+    │       ]
+    │     }],
+    │     "temperature": 0,
+    │     "max_tokens": 500
+    │   }
     └─ 超时 180 秒
     │
     ▼
@@ -348,73 +339,6 @@ _parse_fcel_to_text() → 解析 <fcel> 标签为纯文本
     ▼
 返回识别文本
 ```
-
-### 6.2 PaddleOCR-VL API 接口格式
-
-PaddleOCR-VL 通过 llama.cpp 服务器提供 OpenAI Chat Completions 兼容接口。
-
-**接口地址**: `POST http://127.0.0.1:8080/v1/chat/completions`
-
-**请求格式**:
-```json
-{
-  "model": "PaddleOCR-VL-1.6.Q4_K_M.gguf",
-  "messages": [{
-    "role": "user",
-    "content": [
-      {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,{BASE64_IMAGE}"}},
-      {"type": "text", "text": "{PROMPT}"}
-    ]
-  }],
-  "temperature": 0,
-  "max_tokens": 8000,
-  "stream": false
-}
-```
-
-**提示词**:
-| 提示词 | 用途 | 输出格式 |
-|--------|------|----------|
-| `OCR:` | 纯文本 OCR | 每行一个文本行 |
-| `Table Recognition:` | 表格识别 | `<fcel>/<nl>/<ucel>/<lcel>` 结构化标签 |
-| 手动输入 | 自定义提示 | 由模型生成 |
-
-**响应格式**:
-```json
-{
-  "id": "chatcmpl-xxx",
-  "object": "chat.completion",
-  "choices": [{
-    "index": 0,
-    "message": {
-      "role": "assistant",
-      "content": "<fcel>...识别结果..."
-    },
-    "finish_reason": "stop"
-  }],
-  "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-}
-```
-
-### 6.3 兼容接口替换方案
-
-由于 PaddleOCR-VL 使用 OpenAI Chat Completions 兼容协议，可以替换为任何支持多模态视觉输入的兼容 API 服务：
-
-**可替换的兼容接口**:
-1. **vLLM + 多模态模型**: 如 Qwen2-VL、InternVL 等，启动时指定 `--served-model-name`
-2. **Ollama**: 支持 `POST /api/chat` 或 OpenAI 兼容模式 `POST /v1/chat/completions`
-3. **其他 OpenAI 兼容服务**: 如 LM Studio、LocalAI 等支持的视觉模型
-
-**替换步骤**:
-1. 修改 `config.py` 中的 `LLAMA_SERVER_URL` 指向新服务地址
-2. 修改 `LLAMA_MODEL_NAME` 为对应模型名称
-3. 确保新服务支持 `image_url` 格式的多模态输入（base64 编码）
-4. 确保输出格式保持一致：OCR 输出纯文本行，Table Recognition 输出 `<fcel>` 标签
-
-**注意事项**:
-- 不同模型的提示词格式可能不同，需根据模型要求调整 `PROMPT`
-- 表格识别功能依赖 `<fcel>/<nl>/<ucel>` 标签输出格式，替换模型需保证相同输出
-- 如只使用纯 OCR 功能，任何视觉模型均可替换，无需标签格式对齐
 
 ## 七、人工校正与导出流程
 
@@ -434,18 +358,7 @@ PUT /api/pages/{page_id}/elements/reorder
     └─ 按提供的 element_order 列表批量更新 reading_order
 ```
 
-### 7.3 智能重排序（Surya）
-
-```
-POST /api/pages/{page_id}/resort
-    ├─ 获取当前页所有元素及其 bbox
-    ├─ 调用 Surya 排序模型重新分配阅读顺序
-    ├─ 更新数据库中所有元素的 reading_order
-    ├─ 更新 is_ordered=1
-    └─ 返回排序后的元素列表
-```
-
-### 7.4 添加新元素
+### 7.3 添加新元素
 
 ```
 POST /api/pages/{page_id}/elements
@@ -455,7 +368,7 @@ POST /api/pages/{page_id}/elements
     └─ 自动分配 reading_order（追加到末尾）
 ```
 
-### 7.5 导出 HTML
+### 7.4 导出 HTML
 
 ```
 GET /api/documents/{doc_id}/export/html
@@ -469,16 +382,6 @@ GET /api/documents/{doc_id}/export/html
     │   ├─ Formula → <div class="formula">
     │   └─ Text → <p>
     └─ 添加 CSS 样式，返回 attachment 下载
-```
-
-### 7.6 导出按页 HTML ZIP
-
-```
-GET /api/documents/{doc_id}/export/html-zip
-    ├─ 为每页生成独立 HTML 文件（文件名：页码号.html）
-    ├─ 合并跨页表格
-    ├─ 打包为 ZIP 文件下载
-    └─ ZIP 内结构：page_1.html, page_2.html, ...
 ```
 
 ## 八、数据库表结构关系
@@ -495,7 +398,6 @@ pdf_documents (文档表)
     │      │  document_id (FK)
     │      │  page_number, width, height
     │      │  jpg_width, jpg_height, is_scanned
-    │      │  is_ordered (0=未排序/fallback, 1=已Surya排序)
     │      │  jpg_path, single_pdf_path
     │      │  status, error_message
     │      │
@@ -514,13 +416,10 @@ pdf_documents (文档表)
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
-| `YOLO_DEVICE` | `"cuda"` | YOLO 推理设备，设为 `"cpu"` 使用 CPU |
-| `SURYA_DEVICE` | `"cuda"` | Surya 排序模型设备，设为 `"cpu"` 使用 CPU |
+| `YOLO_DEVICE` | `"cpu"` | YOLO 推理设备，设为 `"cuda"` 启用 GPU |
 | `YOLO_IMG_SIZE` | `1280` | YOLO 推理图片尺寸，越大越精确但越慢 |
-| `SURYA_VRAM_MIN_MB` | `800` | 加载 Surya 模型所需最小空闲显存 (MB) |
 | `SCAN_TEXT_THRESHOLD` | `10` | 扫描件检测文本字符数阈值 |
 | `SCAN_IMAGE_AREA_RATIO` | `0.8` | 扫描件图片占页面比例阈值 |
 | `GARBLE_CJK_THRESHOLD` | `0.3` | 中文乱码比例阈值 |
-| `LLAMA_SERVER_URL` | `"http://127.0.0.1:8080"` | llama.cpp OCR 服务器地址（OpenAI 兼容） |
-| `LLAMA_MODEL_NAME` | `"PaddleOCR-VL-1.6.Q4_K_M.gguf"` | OCR 模型名称 |
+| `LLAMA_SERVER_URL` | `"http://127.0.0.1:8080"` | llama.cpp OCR 服务器地址 |
 | `DEFAULT_DPI` | `200` | PDF 转图片的 DPI |

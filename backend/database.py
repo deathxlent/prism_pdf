@@ -78,11 +78,6 @@ async def init_db():
             await db.execute("ALTER TABLE page_elements ADD COLUMN cross_page_group INTEGER")
         except aiosqlite.OperationalError:
             pass
-
-        try:
-            await db.execute("ALTER TABLE pdf_pages ADD COLUMN is_ordered INTEGER NOT NULL DEFAULT 1")
-        except aiosqlite.OperationalError:
-            pass
         
         await db.commit()
 

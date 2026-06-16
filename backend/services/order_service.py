@@ -8,29 +8,6 @@ logger = logging.getLogger(__name__)
 
 _order_model = None
 _order_processor = None
-_surya_load_failed = False
-SURYA_VRAM_MIN_MB = 800
-
-
-def check_vram_available(min_mb: int = SURYA_VRAM_MIN_MB) -> tuple[bool, int]:
-    try:
-        import torch
-        if not torch.cuda.is_available():
-            return False, 0
-        free_mem, total_mem = torch.cuda.mem_get_info()
-        free_mb = free_mem // (1024 * 1024)
-        return free_mb >= min_mb, free_mb
-    except Exception as e:
-        logger.warning(f"Failed to check VRAM: {e}")
-        return False, 0
-
-
-def is_surya_loaded() -> bool:
-    return _order_model is not None and _order_processor is not None
-
-
-def should_skip_surya() -> bool:
-    return _surya_load_failed
 
 
 def _download_surya_order_model() -> str:
@@ -97,30 +74,21 @@ def _get_ordering_model_and_processor():
         else:
             ssl._create_default_https_context = _create_unverified_https_context
 
-        from backend.config import SURYA_DEVICE
-
         local_model_path = _download_surya_order_model()
 
         from surya.model.ordering.model import load_model as order_load_model
         from surya.model.ordering.processor import load_processor as order_load_processor
 
-        device = SURYA_DEVICE
-        import torch
-        if device == "cuda" and not torch.cuda.is_available():
-            logger.warning("CUDA requested for Surya but not available, falling back to CPU")
-            device = "cpu"
-
-        logger.info(f"Loading Surya ordering model from {local_model_path} on {device}...")
-        _order_model = order_load_model(checkpoint=local_model_path, device=device)
+        logger.info(f"Loading Surya ordering model from {local_model_path} on CPU...")
+        _order_model = order_load_model(checkpoint=local_model_path, device="cpu")
         _order_processor = order_load_processor(checkpoint=local_model_path)
-        logger.info(f"Surya ordering model loaded successfully on {device}")
+        logger.info("Surya ordering model loaded successfully on CPU")
     except Exception as e:
         logger.warning(f"Failed to load Surya ordering model: {e}. Will use fallback reading order.")
         import traceback
         logger.warning(traceback.format_exc())
         _order_model = None
         _order_processor = None
-        _surya_load_failed = True
 
     return _order_model, _order_processor
 

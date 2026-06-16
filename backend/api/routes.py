@@ -1,7 +1,5 @@
 import os
-import io
 import uuid
-import zipfile
 import asyncio
 import aiosqlite
 from pathlib import Path
@@ -81,7 +79,6 @@ async def get_status(doc_id: int):
             "jpg_height": p["jpg_height"],
             "status": p["status"],
             "is_scanned": bool(p["is_scanned"]),
-            "is_ordered": bool(p.get("is_ordered", 1)),
             "jpg_path": p["jpg_path"],
             "single_pdf_path": p["single_pdf_path"],
         }
@@ -831,165 +828,6 @@ async def export_page_markdown(page_id: int):
     return Response(
         content=md_content,
         media_type="text/markdown; charset=utf-8",
-        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename.encode('utf-8').decode('latin-1')}"}
-    )
-
-
-@router.post("/pages/{page_id}/resort")
-async def resort_page(page_id: int):
-    page = await db.get_page(page_id)
-    if not page:
-        raise HTTPException(status_code=404, detail="Page not found")
-
-    elements = await db.get_elements(page_id)
-    if not elements:
-        raise HTTPException(status_code=400, detail="No elements found for this page")
-
-    jpg_path = page.get("jpg_path", "")
-    if not jpg_path or not os.path.exists(jpg_path):
-        raise HTTPException(status_code=400, detail="Page image not found")
-
-    surya_elements = []
-    for i, elem in enumerate(elements):
-        surya_elements.append({
-            "bbox": (elem["bbox_x0"], elem["bbox_y0"], elem["bbox_x1"], elem["bbox_y1"]),
-            "element_type": elem["element_type"],
-            "reading_order": elem["reading_order"],
-            "_orig_idx": i,
-        })
-
-    from backend.services.order_service import assign_reading_order
-    sorted_elements = await asyncio.to_thread(assign_reading_order, surya_elements, jpg_path)
-
-    async with aiosqlite.connect(str(DB_PATH)) as conn:
-        for elem_data in sorted_elements:
-            orig_idx = elem_data.get("_orig_idx")
-            if orig_idx is not None:
-                await conn.execute(
-                    "UPDATE page_elements SET reading_order = ? WHERE id = ?",
-                    (elem_data["reading_order"], elements[orig_idx]["id"])
-                )
-        await conn.commit()
-
-    await db.update_page(page_id, is_ordered=1)
-
-    updated_elements = await db.get_elements(page_id)
-    return {
-        "message": "Page resorted successfully",
-        "page_id": page_id,
-        "is_ordered": True,
-        "elements": updated_elements,
-    }
-
-
-def _generate_page_html(page: dict, elements: list[dict], doc_name: str) -> str:
-    html_parts = [
-        "<!DOCTYPE html>",
-        "<html lang='zh-CN'>",
-        "<head>",
-        "<meta charset='UTF-8'>",
-        f"<title>{doc_name} - 第 {page['page_number']} 页</title>",
-        "<style>",
-        "body { font-family: 'Microsoft YaHei', Arial, sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; line-height: 1.6; }",
-        "h1 { color: #333; border-bottom: 3px solid #007bff; padding-bottom: 10px; }",
-        "h2 { color: #555; margin-top: 20px; }",
-        "h3 { color: #666; }",
-        "table { border-collapse: collapse; width: 100%; margin: 10px 0; }",
-        "table, th, td { border: 1px solid #ddd; }",
-        "th, td { padding: 8px 12px; text-align: left; }",
-        "th { background-color: #f5f5f5; }",
-        "img { max-width: 100%; height: auto; margin: 10px 0; }",
-        ".page-header, .page-footer { color: #888; font-size: 0.9em; font-style: italic; }",
-        ".formula { text-align: center; font-size: 1.1em; margin: 15px 0; }",
-        ".caption { font-style: italic; color: #666; text-align: center; }",
-        "</style>",
-        "</head>",
-        "<body>",
-        f"<h1>第 {page['page_number']} 页</h1>",
-    ]
-
-    sorted_elements = sorted(elements, key=lambda e: e["reading_order"])
-
-    for elem in sorted_elements:
-        etype = elem["element_type"]
-        content = elem.get("content", "") or ""
-        content_format = elem.get("content_format", "") or ""
-
-        if etype == "Title":
-            html_parts.append(f"<h1 style='color: #dc143c;'>{content}</h1>")
-        elif etype == "Section-header":
-            html_parts.append(f"<h2>{content}</h2>")
-        elif etype == "Page-header":
-            html_parts.append(f"<div class='page-header'>{content}</div>")
-        elif etype == "Page-footer":
-            html_parts.append(f"<div class='page-footer'>{content}</div>")
-        elif etype == "Formula":
-            html_parts.append(f"<div class='formula'>{content}</div>")
-        elif etype == "Table":
-            if content_format == "html":
-                html_parts.append(content)
-            else:
-                html_parts.append(f"<pre>{content}</pre>")
-        elif etype == "Picture":
-            if content:
-                html_parts.append(f'<img src="file://{content}" alt="Picture">')
-        elif etype == "Caption":
-            html_parts.append(f"<div class='caption'>{content}</div>")
-        elif etype == "List-item":
-            html_parts.append(f"<li>{content}</li>")
-        elif etype in TEXT_TYPES:
-            if content.strip():
-                html_parts.append(f"<p>{content}</p>")
-        else:
-            if content.strip():
-                html_parts.append(f"<p>{content}</p>")
-
-    html_parts.append("</body></html>")
-    return "\n".join(html_parts)
-
-
-@router.get("/documents/{doc_id}/export/html-zip")
-async def export_document_html_zip(doc_id: int):
-    result = await get_parse_results(doc_id)
-    if "error" in result:
-        raise HTTPException(status_code=404, detail=result["error"])
-
-    pages = result["pages"]
-    doc = result["document"]
-    doc_name = Path(doc['original_filename']).stem
-
-    pages = _merge_cross_page_tables(pages)
-
-    first_elem_per_group = {}
-    for page in pages:
-        for elem in sorted(page["elements"], key=lambda e: e["reading_order"]):
-            cpg = elem.get("cross_page_group")
-            if cpg is not None and elem["element_type"] == "Table" and cpg not in first_elem_per_group:
-                first_elem_per_group[cpg] = elem["id"]
-
-    zip_buffer = io.BytesIO()
-    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-        for page in pages:
-            page_num = page["page_number"]
-            skip_groups = page.get("_skip_groups", set())
-
-            filtered_elements = []
-            for elem in sorted(page["elements"], key=lambda e: e["reading_order"]):
-                cpg = elem.get("cross_page_group")
-                if elem["element_type"] == "Table" and cpg in skip_groups and cpg is not None:
-                    if first_elem_per_group.get(cpg) != elem["id"]:
-                        continue
-                filtered_elements.append(elem)
-
-            html_content = _generate_page_html(page, filtered_elements, doc_name)
-            zf.writestr(f"page_{page_num}.html", html_content)
-
-    zip_buffer.seek(0)
-    filename = f"{doc_name}_按页导出.zip"
-
-    return Response(
-        content=zip_buffer.getvalue(),
-        media_type="application/zip",
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename.encode('utf-8').decode('latin-1')}"}
     )
 
