@@ -4,6 +4,7 @@ import asyncio
 import aiosqlite
 import zipfile
 import io
+from datetime import datetime
 from pathlib import Path
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse, Response, HTMLResponse
@@ -211,7 +212,10 @@ async def reorder_elements(page_id: int, data: dict):
                 "UPDATE page_elements SET reading_order = ? WHERE id = ? AND page_id = ?",
                 (idx, elem_id, page_id)
             )
-        await db.update_page(page_id, is_ordered=1)
+        await conn.execute(
+            "UPDATE pdf_pages SET is_ordered = 1, updated_at = ? WHERE id = ?",
+            (datetime.now().isoformat(), page_id)
+        )
         await conn.commit()
 
     return {"message": "Elements reordered", "page_id": page_id}
@@ -272,7 +276,10 @@ async def surya_reorder_page(page_id: int):
                     "UPDATE page_elements SET reading_order = ? WHERE id = ? AND page_id = ?",
                     (idx, elem_id, page_id)
                 )
-        await db.update_page(page_id, is_ordered=1)
+        await conn.execute(
+            "UPDATE pdf_pages SET is_ordered = 1, updated_at = ? WHERE id = ?",
+            (datetime.now().isoformat(), page_id)
+        )
         await conn.commit()
 
     return {"message": "Page reordered with Surya", "page_id": page_id, "is_ordered": True}
