@@ -245,8 +245,9 @@ async def surya_reorder_page(page_id: int):
     elem_dicts = []
     for elem in elements:
         elem_dicts.append({
+            "_id": elem["id"],
             "element_type": elem["element_type"],
-            "bbox": tuple(elem["bbox"]) if isinstance(elem["bbox"], (list, tuple)) else elem["bbox"],
+            "bbox": (elem["bbox_x0"], elem["bbox_y0"], elem["bbox_x1"], elem["bbox_y1"]),
             "confidence": elem.get("confidence", 1.0),
             "reading_order": elem.get("reading_order", 0),
             "content": elem.get("content", ""),
@@ -265,11 +266,11 @@ async def surya_reorder_page(page_id: int):
 
     async with aiosqlite.connect(str(DB_PATH)) as conn:
         for idx, elem in enumerate(reordered):
-            elem_id = elements[idx]["id"] if idx < len(elements) else None
+            elem_id = elem.get("_id")
             if elem_id is not None:
                 await conn.execute(
                     "UPDATE page_elements SET reading_order = ? WHERE id = ? AND page_id = ?",
-                    (elem["reading_order"], elem_id, page_id)
+                    (idx, elem_id, page_id)
                 )
         await db.update_page(page_id, is_ordered=1)
         await conn.commit()
