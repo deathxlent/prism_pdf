@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
 
 _processing_tasks: dict[int, asyncio.Task] = {}
+_reordering_pages: set[int] = set()
 
 
 @router.post("/upload")
@@ -278,17 +279,23 @@ async def surya_reorder_page(page_id: int):
     if not jpg_path or not Path(jpg_path).exists():
         raise HTTPException(status_code=400, detail="Page image not found")
 
-    from backend.services.order_service import is_surya_model_loaded, is_surya_loaded_on_gpu
+    if page_id in _reordering_pages:
+        raise HTTPException(status_code=409, detail="该页面正在重排序中，请稍候...")
+
+    from backend.services.order_service import is_surya_loaded_on_gpu
     
-    model_already_loaded = is_surya_model_loaded()
     model_on_gpu = is_surya_loaded_on_gpu()
     
-    reset_surya_state()
+    if not model_on_gpu:
+        reset_surya_state()
     gpu_ok = check_gpu_available_for_surya()
     
-    if not gpu_ok and not model_already_loaded:
-        logger.warning("GPU显存不足，将尝试CPU模式加载Surya排序模型（速度会较慢）")
-    
+    if not gpu_ok:
+        raise HTTPException(
+            status_code=503,
+            detail="GPU资源不足，无法加载Surya排序模型。请释放显存后重试。"
+        )
+
     elements = await db.get_elements(page_id)
     if not elements:
         raise HTTPException(status_code=400, detail="No elements found on this page")
@@ -305,43 +312,42 @@ async def surya_reorder_page(page_id: int):
             "content_format": elem.get("content_format", ""),
         })
 
-    reordered, surya_ok = await asyncio.to_thread(
-        assign_reading_order, elem_dicts, jpg_path
-    )
+    _reordering_pages.add(page_id)
+    try:
+        reordered, surya_ok = await asyncio.to_thread(
+            assign_reading_order, elem_dicts, jpg_path
+        )
 
-    if not surya_ok:
-        if not is_surya_model_loaded():
+        if not surya_ok:
             raise HTTPException(
                 status_code=503,
-                detail="Surya排序模型加载失败，无法进行重排序。请释放显存后重试。"
-            )
-        else:
-            raise HTTPException(
-                status_code=500,
-                detail="Surya排序模型推理失败，请重试。"
+                detail="Surya排序模型加载失败，无法进行重排序。"
             )
 
-    async with aiosqlite.connect(str(DB_PATH)) as conn:
-        for idx, elem in enumerate(reordered):
-            elem_id = elem.get("_id")
-            if elem_id is not None:
-                await conn.execute(
-                    "UPDATE page_elements SET reading_order = ? WHERE id = ? AND page_id = ?",
-                    (idx, elem_id, page_id)
-                )
-        await conn.execute(
-            "UPDATE pdf_pages SET is_ordered = 1, updated_at = ? WHERE id = ?",
-            (datetime.now().isoformat(), page_id)
-        )
-        await conn.commit()
+        async with aiosqlite.connect(str(DB_PATH)) as conn:
+            for idx, elem in enumerate(reordered):
+                elem_id = elem.get("_id")
+                if elem_id is not None:
+                    await conn.execute(
+                        "UPDATE page_elements SET reading_order = ? WHERE id = ? AND page_id = ?",
+                        (idx, elem_id, page_id)
+                    )
+            await conn.execute(
+                "UPDATE pdf_pages SET is_ordered = 1, updated_at = ? WHERE id = ?",
+                (datetime.now().isoformat(), page_id)
+            )
+            await conn.commit()
+    finally:
+        _reordering_pages.discard(page_id)
 
-    result_msg = "Page reordered with Surya"
-    if model_on_gpu or (gpu_ok and not model_already_loaded):
-        result_msg += " (GPU)"
-    else:
-        result_msg += " (CPU)"
-    
-    return {"message": result_msg, "page_id": page_id, "is_ordered": True}
+    return {"message": "Page reordered with Surya", "page_id": page_id, "is_ordered": True}
+
+
+@router.get("/pages/reorder-status")
+async def get_all_reorder_status():
+    return {
+        "reordering_pages": list(_reordering_pages)
+    }
 
 
 @router.get("/pages/{page_id}/elements")

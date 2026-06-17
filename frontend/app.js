@@ -21,6 +21,7 @@ let selectionRect = null;
 let selectionOverlay = null;
 let selectedBbox = null;
 let pendingNewElement = null;
+let reorderingPages = new Set();
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
@@ -510,13 +511,20 @@ async function loadPage(index) {
         const isOrdered = data.is_ordered !== false && page.is_ordered !== false;
         const unorderedBadge = $('#unordered-badge');
         const reorderBtn = $('#reorder-btn');
+        const isPageReordering = reorderingPages.has(page.id);
         
         if (isOrdered) {
             unorderedBadge.classList.add('hidden');
-            reorderBtn.style.display = '';
         } else {
             unorderedBadge.classList.remove('hidden');
-            reorderBtn.style.display = '';
+        }
+        
+        reorderBtn.style.display = '';
+        reorderBtn.disabled = isPageReordering;
+        if (isPageReordering) {
+            reorderBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 排序中...';
+        } else {
+            reorderBtn.innerHTML = '<i class="fas fa-sort-amount-down"></i> 重排序';
         }
 
         await renderPdfPage(page);
@@ -1387,17 +1395,21 @@ function exportCurrentPagePdf() {
 
 async function reorderCurrentPage() {
     if (!currentPageData) return;
+    
+    const pageId = currentPageData.id;
+    if (reorderingPages.has(pageId)) return;
 
     const confirmMsg = '确定要使用Surya模型对该页进行重新排序吗？\n\n注意：如果显存不足，可能会失败。';
     if (!confirm(confirmMsg)) return;
 
+    reorderingPages.add(pageId);
+    
     const reorderBtn = $('#reorder-btn');
-    const originalText = reorderBtn.innerHTML;
     reorderBtn.disabled = true;
     reorderBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 排序中...';
 
     try {
-        const res = await fetch(`${API}/api/pages/${currentPageData.id}/reorder`, {
+        const res = await fetch(`${API}/api/pages/${pageId}/reorder`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' }
         });
@@ -1409,25 +1421,30 @@ async function reorderCurrentPage() {
 
         const result = await res.json();
         
-        if (currentPageData) {
+        if (currentPageData && currentPageData.id === pageId) {
             currentPageData.is_ordered = true;
         }
         
-        const idx = currentPages.findIndex(p => p.id === currentPageData.id);
+        const idx = currentPages.findIndex(p => p.id === pageId);
         if (idx >= 0) {
             currentPages[idx].is_ordered = true;
         }
 
         renderThumbnails();
-        loadPage(currentPageIndex);
+        if (currentPageData && currentPageData.id === pageId) {
+            loadPage(currentPageIndex);
+        }
         
         alert('重排序成功！页面元素已重新排序。');
     } catch (e) {
         console.error('Reorder failed:', e);
         alert('重排序失败: ' + e.message);
     } finally {
-        reorderBtn.disabled = false;
-        reorderBtn.innerHTML = originalText;
+        reorderingPages.delete(pageId);
+        if (currentPageData && currentPageData.id === pageId) {
+            reorderBtn.disabled = false;
+            reorderBtn.innerHTML = '<i class="fas fa-sort-amount-down"></i> 重排序';
+        }
     }
 }
 
