@@ -282,7 +282,9 @@ async def surya_reorder_page(page_id: int):
     if page_id in _reordering_pages:
         raise HTTPException(status_code=409, detail="该页面正在重排序中，请稍候...")
 
-    from backend.services.order_service import is_surya_loaded_on_gpu
+    from backend.services.order_service import is_surya_loaded_on_gpu, reset_cuda_corrupted_state
+    
+    reset_cuda_corrupted_state()
     
     model_on_gpu = is_surya_loaded_on_gpu()
     
@@ -291,9 +293,15 @@ async def surya_reorder_page(page_id: int):
     gpu_ok = check_gpu_available_for_surya()
     
     if not gpu_ok:
+        async with aiosqlite.connect(str(DB_PATH)) as conn:
+            await conn.execute(
+                "UPDATE pdf_pages SET is_ordered = 0, updated_at = ? WHERE id = ?",
+                (datetime.now().isoformat(), page_id)
+            )
+            await conn.commit()
         raise HTTPException(
             status_code=503,
-            detail="GPU资源不足，无法加载Surya排序模型。请释放显存后重试。"
+            detail="GPU资源不足，无法加载Surya排序模型。请释放显存后重试。该页已标记为未排序。"
         )
 
     elements = await db.get_elements(page_id)
@@ -318,25 +326,30 @@ async def surya_reorder_page(page_id: int):
             assign_reading_order, elem_dicts, jpg_path
         )
 
-        if not surya_ok:
-            raise HTTPException(
-                status_code=503,
-                detail="Surya排序模型加载失败，无法进行重排序。"
-            )
-
         async with aiosqlite.connect(str(DB_PATH)) as conn:
-            for idx, elem in enumerate(reordered):
-                elem_id = elem.get("_id")
-                if elem_id is not None:
-                    await conn.execute(
-                        "UPDATE page_elements SET reading_order = ? WHERE id = ? AND page_id = ?",
-                        (idx, elem_id, page_id)
-                    )
-            await conn.execute(
-                "UPDATE pdf_pages SET is_ordered = 1, updated_at = ? WHERE id = ?",
-                (datetime.now().isoformat(), page_id)
-            )
-            await conn.commit()
+            if surya_ok:
+                for idx, elem in enumerate(reordered):
+                    elem_id = elem.get("_id")
+                    if elem_id is not None:
+                        await conn.execute(
+                            "UPDATE page_elements SET reading_order = ? WHERE id = ? AND page_id = ?",
+                            (idx, elem_id, page_id)
+                        )
+                await conn.execute(
+                    "UPDATE pdf_pages SET is_ordered = 1, updated_at = ? WHERE id = ?",
+                    (datetime.now().isoformat(), page_id)
+                )
+                await conn.commit()
+            else:
+                await conn.execute(
+                    "UPDATE pdf_pages SET is_ordered = 0, updated_at = ? WHERE id = ?",
+                    (datetime.now().isoformat(), page_id)
+                )
+                await conn.commit()
+                raise HTTPException(
+                    status_code=500,
+                    detail="Surya排序失败（可能是CUDA错误）。该页已标记为未排序。"
+                )
     finally:
         _reordering_pages.discard(page_id)
 

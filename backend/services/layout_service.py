@@ -1,6 +1,7 @@
 import os
 import logging
 import io
+import threading
 from pathlib import Path
 from huggingface_hub import hf_hub_download
 from ultralytics import YOLO
@@ -12,6 +13,8 @@ logger = logging.getLogger(__name__)
 _model = None
 _model_loaded_on_gpu = False
 _raw_layout_data: dict[str, list[dict]] = {}
+_model_load_lock = threading.Lock()
+_inference_lock = threading.Lock()
 
 
 def is_yolo_model_loaded() -> bool:
@@ -242,38 +245,42 @@ def _get_model() -> YOLO:
     if _model is not None:
         return _model
 
-    model_path = MODELS_DIR / YOLO_MODEL_FILE
-    if not model_path.exists():
-        logger.info("Downloading YOLO26m model from HuggingFace Mirror...")
-        os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
-        downloaded = hf_hub_download(
-            repo_id=YOLO_MODEL_REPO,
-            filename=YOLO_MODEL_FILE,
-            repo_type="model",
-            local_dir=str(MODELS_DIR),
-        )
-        model_path = Path(downloaded)
+    with _model_load_lock:
+        if _model is not None:
+            return _model
 
-    logger.info(f"Loading YOLO26m model from {model_path}")
-    
-    import torch
-    gpu_available = check_gpu_available_for_yolo()
-    if gpu_available and YOLO_DEVICE == "cuda" and torch.cuda.is_available():
-        try:
-            _model = YOLO(str(model_path))
-            _model.to("cuda")
-            _model_loaded_on_gpu = True
-            logger.info(f"YOLO model loaded on CUDA device: {torch.cuda.get_device_name(0)}")
-        except Exception as e:
-            logger.warning(f"Failed to load YOLO on CUDA: {e}, will use CPU")
+        model_path = MODELS_DIR / YOLO_MODEL_FILE
+        if not model_path.exists():
+            logger.info("Downloading YOLO26m model from HuggingFace Mirror...")
+            os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+            downloaded = hf_hub_download(
+                repo_id=YOLO_MODEL_REPO,
+                filename=YOLO_MODEL_FILE,
+                repo_type="model",
+                local_dir=str(MODELS_DIR),
+            )
+            model_path = Path(downloaded)
+
+        logger.info(f"Loading YOLO26m model from {model_path}")
+        
+        import torch
+        gpu_available = check_gpu_available_for_yolo()
+        if gpu_available and YOLO_DEVICE == "cuda" and torch.cuda.is_available():
+            try:
+                _model = YOLO(str(model_path))
+                _model.to("cuda")
+                _model_loaded_on_gpu = True
+                logger.info(f"YOLO model loaded on CUDA device: {torch.cuda.get_device_name(0)}")
+            except Exception as e:
+                logger.warning(f"Failed to load YOLO on CUDA: {e}, will use CPU")
+                _model = YOLO(str(model_path))
+                _model_loaded_on_gpu = False
+        else:
+            logger.info(f"YOLO model running on CPU")
             _model = YOLO(str(model_path))
             _model_loaded_on_gpu = False
-    else:
-        logger.info(f"YOLO model running on CPU")
-        _model = YOLO(str(model_path))
-        _model_loaded_on_gpu = False
-    
-    return _model
+        
+        return _model
 
 
 def _get_inference_kwargs() -> dict:
@@ -288,7 +295,9 @@ def _get_inference_kwargs() -> dict:
 def detect_layout(image_path: str) -> list[dict]:
     model = _get_model()
     kwargs = _get_inference_kwargs()
-    results = model(image_path, **kwargs)
+    
+    with _inference_lock:
+        results = model(image_path, **kwargs)
 
     elements = []
     raw_elements = []

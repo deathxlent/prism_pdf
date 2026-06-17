@@ -1,5 +1,6 @@
 import logging
 import os
+import threading
 from PIL import Image
 from backend.services.layout_service import detect_layout
 from backend.config import MODELS_DIR, HF_MIRROR_URL, SURYA_ORDER_MODEL_REPO, SURYA_ORDER_DEVICE
@@ -10,6 +11,9 @@ _order_model = None
 _order_processor = None
 _order_model_loaded_on_gpu = False
 _surya_gpu_available = None
+_model_load_lock = threading.Lock()
+_inference_lock = threading.Lock()
+_cuda_corrupted = False
 
 
 def is_surya_model_loaded() -> bool:
@@ -18,6 +22,46 @@ def is_surya_model_loaded() -> bool:
 
 def is_surya_loaded_on_gpu() -> bool:
     return _order_model_loaded_on_gpu
+
+
+def reset_cuda_corrupted_state():
+    global _cuda_corrupted
+    if _cuda_corrupted:
+        logger.info("Resetting CUDA corrupted state, will attempt to reload model on next call")
+        _clear_surya_model()
+        _cuda_corrupted = False
+
+
+def _clear_surya_model():
+    global _order_model, _order_processor, _order_model_loaded_on_gpu, _surya_gpu_available
+    try:
+        if _order_model is not None:
+            try:
+                import torch
+                if hasattr(_order_model, 'to'):
+                    _order_model.to('cpu')
+            except Exception:
+                pass
+            del _order_model
+    except Exception:
+        pass
+    try:
+        if _order_processor is not None:
+            del _order_processor
+    except Exception:
+        pass
+    
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+    
+    _order_model = None
+    _order_processor = None
+    _order_model_loaded_on_gpu = False
+    _surya_gpu_available = None
 
 
 def check_gpu_available_for_surya(min_free_vram_mb: int = 2048) -> bool:
@@ -120,78 +164,88 @@ def _download_surya_order_model() -> str:
 
 
 def _get_ordering_model_and_processor():
-    global _order_model, _order_processor, _order_model_loaded_on_gpu, _surya_gpu_available
+    global _order_model, _order_processor, _order_model_loaded_on_gpu, _surya_gpu_available, _cuda_corrupted
+    
+    if _cuda_corrupted:
+        logger.warning("CUDA context was corrupted by previous error, clearing model state")
+        _clear_surya_model()
+        _cuda_corrupted = False
+    
     if _order_model is not None and _order_processor is not None:
         return _order_model, _order_processor
 
-    if _surya_gpu_available is False and not is_surya_loaded_on_gpu():
-        logger.info("Surya GPU not available (previously determined), skipping model load")
-        return None, None
+    with _model_load_lock:
+        if _order_model is not None and _order_processor is not None:
+            return _order_model, _order_processor
 
-    try:
-        import os
-        os.environ["HF_ENDPOINT"] = HF_MIRROR_URL
+        if _surya_gpu_available is False and not is_surya_loaded_on_gpu():
+            logger.info("Surya GPU not available (previously determined), skipping model load")
+            return None, None
 
         try:
-            import urllib3
-            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        except:
-            pass
-        import ssl
-        try:
-            _create_unverified_https_context = ssl._create_unverified_context
-        except AttributeError:
-            pass
-        else:
-            ssl._create_default_https_context = _create_unverified_https_context
+            import os
+            os.environ["HF_ENDPOINT"] = HF_MIRROR_URL
 
-        local_model_path = _download_surya_order_model()
-
-        from surya.model.ordering.model import load_model as order_load_model
-        from surya.model.ordering.processor import load_processor as order_load_processor
-        import torch
-
-        device = "cpu"
-        gpu_can_load = False
-        
-        if SURYA_ORDER_DEVICE == "cuda" and torch.cuda.is_available():
-            if is_surya_loaded_on_gpu():
-                gpu_can_load = True
-                device = "cuda"
+            try:
+                import urllib3
+                urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            except:
+                pass
+            import ssl
+            try:
+                _create_unverified_https_context = ssl._create_unverified_context
+            except AttributeError:
+                pass
             else:
-                free_vram = torch.cuda.mem_get_info()[0] / (1024 * 1024)
-                if free_vram >= 2048:
+                ssl._create_default_https_context = _create_unverified_https_context
+
+            local_model_path = _download_surya_order_model()
+
+            from surya.model.ordering.model import load_model as order_load_model
+            from surya.model.ordering.processor import load_processor as order_load_processor
+            import torch
+
+            device = "cpu"
+            gpu_can_load = False
+            
+            if SURYA_ORDER_DEVICE == "cuda" and torch.cuda.is_available():
+                if is_surya_loaded_on_gpu():
                     gpu_can_load = True
                     device = "cuda"
-                    logger.info(f"Loading Surya ordering model on CUDA (free VRAM: {free_vram:.0f}MB)...")
                 else:
-                    logger.warning(f"Insufficient VRAM ({free_vram:.0f}MB free), skipping Surya model load")
-                    _order_model = None
-                    _order_processor = None
-                    _order_model_loaded_on_gpu = False
-                    _surya_gpu_available = False
-                    return None, None
-        else:
-            logger.info(f"CUDA not available, skipping Surya ordering model load")
+                    free_vram = torch.cuda.mem_get_info()[0] / (1024 * 1024)
+                    if free_vram >= 2048:
+                        gpu_can_load = True
+                        device = "cuda"
+                        logger.info(f"Loading Surya ordering model on CUDA (free VRAM: {free_vram:.0f}MB)...")
+                    else:
+                        logger.warning(f"Insufficient VRAM ({free_vram:.0f}MB free), skipping Surya model load")
+                        _order_model = None
+                        _order_processor = None
+                        _order_model_loaded_on_gpu = False
+                        _surya_gpu_available = False
+                        return None, None
+            else:
+                logger.info(f"CUDA not available, skipping Surya ordering model load")
+                _order_model = None
+                _order_processor = None
+                _order_model_loaded_on_gpu = False
+                return None, None
+
+            _order_model = order_load_model(checkpoint=local_model_path, device=device)
+            _order_processor = order_load_processor(checkpoint=local_model_path)
+            _order_model_loaded_on_gpu = gpu_can_load and (device == "cuda")
+            
+            logger.info(f"Surya ordering model loaded successfully on {device.upper()}")
+        except Exception as e:
+            logger.warning(f"Failed to load Surya ordering model: {e}. Will use fallback reading order.")
+            import traceback
+            logger.warning(traceback.format_exc())
             _order_model = None
             _order_processor = None
             _order_model_loaded_on_gpu = False
-            return None, None
 
-        _order_model = order_load_model(checkpoint=local_model_path, device=device)
-        _order_processor = order_load_processor(checkpoint=local_model_path)
-        _order_model_loaded_on_gpu = gpu_can_load and (device == "cuda")
-        
-        logger.info(f"Surya ordering model loaded successfully on {device.upper()}")
-    except Exception as e:
-        logger.warning(f"Failed to load Surya ordering model: {e}. Will use fallback reading order.")
-        import traceback
-        logger.warning(traceback.format_exc())
-        _order_model = None
-        _order_processor = None
-        _order_model_loaded_on_gpu = False
-
-    return _order_model, _order_processor
+        return _order_model, _order_processor
 
 
 def _compute_iou(box_a: tuple, box_b: tuple) -> float:
@@ -226,6 +280,8 @@ def assign_reading_order(elements: list[dict], image_path: str) -> tuple[list[di
         (elements, is_surya_ordered): elements with reading order, 
         True if Surya was used, False if fallback was used
     """
+    global _cuda_corrupted
+    
     if not elements:
         return elements, True
 
@@ -241,6 +297,12 @@ def assign_reading_order(elements: list[dict], image_path: str) -> tuple[list[di
 
         image = Image.open(image_path)
         image_size = image.size
+        img_w, img_h = image_size
+
+        MAX_BOXES_PER_PAGE = 512
+        if len(elements) > MAX_BOXES_PER_PAGE:
+            logger.warning(f"Too many elements ({len(elements)} > {MAX_BOXES_PER_PAGE}), using fallback")
+            return _fallback_reading_order(elements), False
 
         bboxes = []
         for elem in elements:
@@ -248,11 +310,29 @@ def assign_reading_order(elements: list[dict], image_path: str) -> tuple[list[di
             x0, y0, x1, y1 = bbox
             x0 = max(0, math.floor(x0))
             y0 = max(0, math.floor(y0))
-            x1 = min(image_size[0], math.ceil(x1))
-            y1 = min(image_size[1], math.ceil(y1))
+            x1 = min(img_w, math.ceil(x1))
+            y1 = min(img_h, math.ceil(y1))
+            
+            w = x1 - x0
+            h = y1 - y0
+            
+            if w <= 2 or h <= 2:
+                continue
+            
+            if w > img_w * 0.98 or h > img_h * 0.98:
+                x1 = min(x1, img_w - 1)
+                y1 = min(y1, img_h - 1)
+                if x1 - x0 <= 2 or y1 - y0 <= 2:
+                    continue
+            
             bboxes.append([x0, y0, x1, y1])
 
-        ordering_results = batch_ordering([image], [bboxes], model, processor)
+        if not bboxes:
+            logger.warning("No valid bboxes after filtering, using fallback")
+            return _fallback_reading_order(elements), False
+
+        with _inference_lock:
+            ordering_results = batch_ordering([image], [bboxes], model, processor)
 
         if not ordering_results or not ordering_results[0].bboxes:
             logger.warning("Surya batch_ordering returned no results, using fallback")
@@ -294,7 +374,22 @@ def assign_reading_order(elements: list[dict], image_path: str) -> tuple[list[di
         return elements, True
 
     except Exception as e:
-        logger.error(f"Surya batch_ordering failed: {e}, using fallback")
+        err_str = str(e).lower()
+        is_cuda_error = ("cuda" in err_str) or ("device-side" in err_str) or ("cu" in err_str and "error" in err_str)
+        
+        if is_cuda_error:
+            logger.error(f"CUDA error detected during Surya inference: {e}")
+            logger.error("Marking CUDA context as corrupted, will clear model for next request")
+            _cuda_corrupted = True
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
+        else:
+            logger.error(f"Surya batch_ordering failed: {e}, using fallback")
+        
         import traceback
         logger.error(traceback.format_exc())
         return _fallback_reading_order(elements), False
