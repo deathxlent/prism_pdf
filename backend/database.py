@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS pdf_pages (
     status TEXT NOT NULL DEFAULT 'pending',
     error_message TEXT,
     created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
     FOREIGN KEY (document_id) REFERENCES pdf_documents(id) ON DELETE CASCADE
 );
 
@@ -83,6 +84,11 @@ async def init_db():
             await db.execute("ALTER TABLE pdf_pages ADD COLUMN is_ordered INTEGER NOT NULL DEFAULT 1")
         except aiosqlite.OperationalError:
             pass
+
+        try:
+            await db.execute("ALTER TABLE pdf_pages ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''")
+        except aiosqlite.OperationalError:
+            pass
         
         await db.commit()
 
@@ -130,18 +136,16 @@ async def create_page(document_id: int, page_number: int, width: float, height: 
     async with aiosqlite.connect(str(DB_PATH)) as db:
         cursor = await db.execute(
             """INSERT INTO pdf_pages
-               (document_id, page_number, width, height, jpg_width, jpg_height, is_scanned, jpg_path, single_pdf_path, status, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, 'pending', ?)""",
-            (document_id, page_number, width, height, jpg_width, jpg_height, jpg_path, single_pdf_path, _now()),
+               (document_id, page_number, width, height, jpg_width, jpg_height, is_scanned, jpg_path, single_pdf_path, status, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, 'pending', ?, ?)""",
+            (document_id, page_number, width, height, jpg_width, jpg_height, jpg_path, single_pdf_path, _now(), _now()),
         )
         await db.commit()
         return cursor.lastrowid
 
 
 async def update_page(page_id: int, **kwargs):
-    kwargs.setdefault("updated_at", _now()) if "updated_at" in kwargs else None
-    if "updated_at" not in kwargs:
-        pass
+    kwargs.setdefault("updated_at", _now())
     sets = ", ".join(f"{k} = ?" for k in kwargs)
     vals = list(kwargs.values()) + [page_id]
     async with aiosqlite.connect(str(DB_PATH)) as db:
