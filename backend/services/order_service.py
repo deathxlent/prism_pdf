@@ -8,13 +8,25 @@ logger = logging.getLogger(__name__)
 
 _order_model = None
 _order_processor = None
+_order_model_loaded_on_gpu = False
 _surya_gpu_available = None
+
+
+def is_surya_model_loaded() -> bool:
+    return _order_model is not None and _order_processor is not None
+
+
+def is_surya_loaded_on_gpu() -> bool:
+    return _order_model_loaded_on_gpu
 
 
 def check_gpu_available_for_surya(min_free_vram_mb: int = 2048) -> bool:
     """
     Check if GPU has enough VRAM to load Surya model.
     Should be called after YOLO is already loaded on GPU.
+    
+    If Surya model is already loaded on GPU, always returns True
+    regardless of current free VRAM (since model is already there).
     
     Args:
         min_free_vram_mb: Minimum free VRAM in MB required for Surya (default 2GB)
@@ -23,6 +35,12 @@ def check_gpu_available_for_surya(min_free_vram_mb: int = 2048) -> bool:
         True if GPU has enough free VRAM, False otherwise
     """
     global _surya_gpu_available
+    
+    if is_surya_loaded_on_gpu():
+        logger.info("Surya model already loaded on GPU, skipping VRAM check")
+        _surya_gpu_available = True
+        return True
+
     if _surya_gpu_available is not None:
         return _surya_gpu_available
 
@@ -42,7 +60,7 @@ def check_gpu_available_for_surya(min_free_vram_mb: int = 2048) -> bool:
             logger.info(f"Enough VRAM ({free_vram:.0f}MB free >= {min_free_vram_mb}MB), Surya can load on GPU")
         else:
             _surya_gpu_available = False
-            logger.warning(f"Insufficient VRAM ({free_vram:.0f}MB free < {min_free_vram_mb}MB), Surya will be skipped")
+            logger.warning(f"Insufficient VRAM ({free_vram:.0f}MB free < {min_free_vram_mb}MB), Surya will use CPU mode if possible")
     except Exception as e:
         _surya_gpu_available = False
         logger.warning(f"Failed to check GPU VRAM: {e}, Surya will be skipped")
@@ -50,13 +68,13 @@ def check_gpu_available_for_surya(min_free_vram_mb: int = 2048) -> bool:
     return _surya_gpu_available
 
 
-def is_surya_model_loaded() -> bool:
-    return _order_model is not None and _order_processor is not None
-
-
 def reset_surya_state():
     global _surya_gpu_available
-    _surya_gpu_available = None
+    if is_surya_loaded_on_gpu():
+        logger.info("Surya model already loaded on GPU, preserving GPU availability state")
+        _surya_gpu_available = True
+    else:
+        _surya_gpu_available = None
 
 
 def _download_surya_order_model() -> str:
@@ -102,13 +120,12 @@ def _download_surya_order_model() -> str:
 
 
 def _get_ordering_model_and_processor():
-    global _order_model, _order_processor
+    global _order_model, _order_processor, _order_model_loaded_on_gpu
     if _order_model is not None and _order_processor is not None:
         return _order_model, _order_processor
 
-    if _surya_gpu_available is False:
-        logger.info("Surya GPU not available (previously determined), skipping model load")
-        return None, None
+    if _surya_gpu_available is False and not is_surya_model_loaded():
+        logger.info("Surya GPU not available (previously determined), will try CPU mode if possible")
 
     try:
         import os
@@ -134,19 +151,28 @@ def _get_ordering_model_and_processor():
         import torch
 
         device = "cpu"
+        gpu_can_load = False
+        
         if SURYA_ORDER_DEVICE == "cuda" and torch.cuda.is_available():
-            free_vram = torch.cuda.mem_get_info()[0] / (1024 * 1024)
-            if free_vram >= 2048:
+            if is_surya_loaded_on_gpu():
+                gpu_can_load = True
                 device = "cuda"
-                logger.info(f"Loading Surya ordering model on CUDA (free VRAM: {free_vram:.0f}MB)...")
             else:
-                logger.warning(f"Insufficient VRAM ({free_vram:.0f}MB free), loading Surya on CPU")
-                device = "cpu"
+                free_vram = torch.cuda.mem_get_info()[0] / (1024 * 1024)
+                if free_vram >= 2048:
+                    gpu_can_load = True
+                    device = "cuda"
+                    logger.info(f"Loading Surya ordering model on CUDA (free VRAM: {free_vram:.0f}MB)...")
+                else:
+                    logger.warning(f"Insufficient VRAM ({free_vram:.0f}MB free), loading Surya on CPU")
+                    device = "cpu"
         else:
             logger.info(f"Loading Surya ordering model on CPU...")
 
         _order_model = order_load_model(checkpoint=local_model_path, device=device)
         _order_processor = order_load_processor(checkpoint=local_model_path)
+        _order_model_loaded_on_gpu = gpu_can_load and (device == "cuda")
+        
         logger.info(f"Surya ordering model loaded successfully on {device.upper()}")
     except Exception as e:
         logger.warning(f"Failed to load Surya ordering model: {e}. Will use fallback reading order.")
@@ -154,6 +180,7 @@ def _get_ordering_model_and_processor():
         logger.warning(traceback.format_exc())
         _order_model = None
         _order_processor = None
+        _order_model_loaded_on_gpu = False
 
     return _order_model, _order_processor
 

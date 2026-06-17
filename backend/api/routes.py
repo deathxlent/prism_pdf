@@ -4,17 +4,20 @@ import asyncio
 import aiosqlite
 import zipfile
 import io
+import logging
+import re
 from datetime import datetime
 from pathlib import Path
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse, Response, HTMLResponse
 from backend.config import TMP_DIR, DB_PATH
 from backend import database as db
-import re
 
 from backend.services.parse_service import process_upload, process_document, get_parse_results, get_parse_progress, TEXT_TYPES
 from backend.services.layout_service import get_raw_layout_data, generate_layout_annotation_image
 from backend.services.order_service import assign_reading_order, check_gpu_available_for_surya, reset_surya_state
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api")
 
@@ -132,6 +135,47 @@ async def list_docs():
     return {"documents": docs}
 
 
+@router.get("/model-status")
+async def get_model_status():
+    from backend.services.layout_service import (
+        is_yolo_model_loaded, is_yolo_loaded_on_gpu, check_gpu_available_for_yolo
+    )
+    from backend.services.order_service import (
+        is_surya_model_loaded, is_surya_loaded_on_gpu, check_gpu_available_for_surya
+    )
+    
+    try:
+        import torch
+        cuda_available = torch.cuda.is_available()
+        if cuda_available:
+            free_vram = torch.cuda.mem_get_info()[0] / (1024 * 1024)
+            total_vram = torch.cuda.mem_get_info()[1] / (1024 * 1024)
+            gpu_info = {
+                "cuda_available": True,
+                "device_name": torch.cuda.get_device_name(0),
+                "free_vram_mb": round(free_vram, 2),
+                "total_vram_mb": round(total_vram, 2),
+            }
+        else:
+            gpu_info = {"cuda_available": False}
+    except Exception as e:
+        gpu_info = {"cuda_available": False, "error": str(e)}
+    
+    return {
+        "yolo": {
+            "loaded": is_yolo_model_loaded(),
+            "loaded_on_gpu": is_yolo_loaded_on_gpu(),
+            "gpu_available": check_gpu_available_for_yolo(),
+        },
+        "surya_order": {
+            "loaded": is_surya_model_loaded(),
+            "loaded_on_gpu": is_surya_loaded_on_gpu(),
+            "gpu_available": check_gpu_available_for_surya(),
+        },
+        "gpu": gpu_info,
+    }
+
+
 @router.delete("/documents/{doc_id}")
 async def delete_doc(doc_id: int):
     doc = await db.get_document(doc_id)
@@ -234,14 +278,17 @@ async def surya_reorder_page(page_id: int):
     if not jpg_path or not Path(jpg_path).exists():
         raise HTTPException(status_code=400, detail="Page image not found")
 
+    from backend.services.order_service import is_surya_model_loaded, is_surya_loaded_on_gpu
+    
+    model_already_loaded = is_surya_model_loaded()
+    model_on_gpu = is_surya_loaded_on_gpu()
+    
     reset_surya_state()
     gpu_ok = check_gpu_available_for_surya()
-    if not gpu_ok:
-        raise HTTPException(
-            status_code=503,
-            detail="GPU资源不足，无法加载Surya排序模型。请释放显存后重试。"
-        )
-
+    
+    if not gpu_ok and not model_already_loaded:
+        logger.warning("GPU显存不足，将尝试CPU模式加载Surya排序模型（速度会较慢）")
+    
     elements = await db.get_elements(page_id)
     if not elements:
         raise HTTPException(status_code=400, detail="No elements found on this page")
@@ -263,10 +310,16 @@ async def surya_reorder_page(page_id: int):
     )
 
     if not surya_ok:
-        raise HTTPException(
-            status_code=503,
-            detail="Surya排序模型加载失败，无法进行重排序。"
-        )
+        if not is_surya_model_loaded():
+            raise HTTPException(
+                status_code=503,
+                detail="Surya排序模型加载失败，无法进行重排序。请释放显存后重试。"
+            )
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail="Surya排序模型推理失败，请重试。"
+            )
 
     async with aiosqlite.connect(str(DB_PATH)) as conn:
         for idx, elem in enumerate(reordered):
@@ -282,7 +335,13 @@ async def surya_reorder_page(page_id: int):
         )
         await conn.commit()
 
-    return {"message": "Page reordered with Surya", "page_id": page_id, "is_ordered": True}
+    result_msg = "Page reordered with Surya"
+    if model_on_gpu or (gpu_ok and not model_already_loaded):
+        result_msg += " (GPU)"
+    else:
+        result_msg += " (CPU)"
+    
+    return {"message": result_msg, "page_id": page_id, "is_ordered": True}
 
 
 @router.get("/pages/{page_id}/elements")

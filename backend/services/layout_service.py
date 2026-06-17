@@ -10,8 +10,51 @@ from backend.config import MODELS_DIR, YOLO_MODEL_REPO, YOLO_MODEL_FILE, YOLO_IM
 logger = logging.getLogger(__name__)
 
 _model = None
-
+_model_loaded_on_gpu = False
 _raw_layout_data: dict[str, list[dict]] = {}
+
+
+def is_yolo_model_loaded() -> bool:
+    return _model is not None
+
+
+def is_yolo_loaded_on_gpu() -> bool:
+    return _model_loaded_on_gpu
+
+
+def check_gpu_available_for_yolo(min_free_vram_mb: int = 3072) -> bool:
+    """
+    Check if GPU has enough VRAM to load YOLO model.
+    
+    Args:
+        min_free_vram_mb: Minimum free VRAM in MB required for YOLO (default 3GB)
+    
+    Returns:
+        True if GPU has enough free VRAM, False otherwise
+    """
+    if is_yolo_loaded_on_gpu():
+        logger.info("YOLO model already loaded on GPU, skipping VRAM check")
+        return True
+    
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            logger.info("CUDA not available, YOLO will use CPU")
+            return False
+        
+        free_vram = torch.cuda.mem_get_info()[0] / (1024 * 1024)
+        total_vram = torch.cuda.mem_get_info()[1] / (1024 * 1024)
+        logger.info(f"GPU VRAM for YOLO: {free_vram:.0f}MB free / {total_vram:.0f}MB total")
+        
+        if free_vram >= min_free_vram_mb:
+            logger.info(f"Enough VRAM ({free_vram:.0f}MB free >= {min_free_vram_mb}MB), YOLO can load on GPU")
+            return True
+        else:
+            logger.warning(f"Insufficient VRAM ({free_vram:.0f}MB free < {min_free_vram_mb}MB), YOLO will use CPU")
+            return False
+    except Exception as e:
+        logger.warning(f"Failed to check GPU VRAM for YOLO: {e}, will use CPU")
+        return False
 
 
 def set_raw_layout_data(image_path: str, raw_data: list[dict]):
@@ -195,7 +238,7 @@ YOLO_CATEGORY_MAP = {
 
 
 def _get_model() -> YOLO:
-    global _model
+    global _model, _model_loaded_on_gpu
     if _model is not None:
         return _model
 
@@ -214,17 +257,21 @@ def _get_model() -> YOLO:
     logger.info(f"Loading YOLO26m model from {model_path}")
     
     import torch
-    if YOLO_DEVICE == "cuda" and torch.cuda.is_available():
+    gpu_available = check_gpu_available_for_yolo()
+    if gpu_available and YOLO_DEVICE == "cuda" and torch.cuda.is_available():
         try:
             _model = YOLO(str(model_path))
             _model.to("cuda")
+            _model_loaded_on_gpu = True
             logger.info(f"YOLO model loaded on CUDA device: {torch.cuda.get_device_name(0)}")
         except Exception as e:
             logger.warning(f"Failed to load YOLO on CUDA: {e}, will use CPU")
             _model = YOLO(str(model_path))
+            _model_loaded_on_gpu = False
     else:
         logger.info(f"YOLO model running on CPU")
         _model = YOLO(str(model_path))
+        _model_loaded_on_gpu = False
     
     return _model
 
@@ -232,7 +279,7 @@ def _get_model() -> YOLO:
 def _get_inference_kwargs() -> dict:
     import torch
     kwargs = {"imgsz": YOLO_IMG_SIZE, "verbose": False}
-    if YOLO_DEVICE == "cuda" and torch.cuda.is_available():
+    if _model_loaded_on_gpu and torch.cuda.is_available():
         kwargs["device"] = "cuda"
         kwargs["half"] = True
     return kwargs
