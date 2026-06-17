@@ -120,7 +120,7 @@ def _download_surya_order_model() -> str:
 
 
 def _get_ordering_model_and_processor():
-    global _order_model, _order_processor, _order_model_loaded_on_gpu
+    global _order_model, _order_processor, _order_model_loaded_on_gpu, _surya_gpu_available
     if _order_model is not None and _order_processor is not None:
         return _order_model, _order_processor
 
