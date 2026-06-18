@@ -4,5 +4,5 @@ models/
 __pycache__/
 .env
 *.db
-llm_configs.json
-**/llm_configs.json
+llm_config*.json
+**/llm_config*.json

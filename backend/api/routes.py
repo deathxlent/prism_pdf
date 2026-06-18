@@ -1139,16 +1139,6 @@ async def get_all_llm_configs():
     return get_all_configs()
 
 
-@router.get("/llm-config/{type_key}")
-async def get_llm_configs_by_type(type_key: str):
-    from backend.services.llm_config_service import get_configs_by_type
-    try:
-        configs = get_configs_by_type(type_key)
-        return {"type": type_key, "configs": configs}
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
 @router.get("/llm-config/active")
 async def get_active_llm_config():
     from backend.services.llm_config_service import get_active_config, get_active_type
@@ -1168,12 +1158,34 @@ async def set_active_llm_type(type_key: str):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.get("/llm-config/{type_key}")
+async def get_llm_configs_by_type(type_key: str):
+    from backend.services.llm_config_service import get_configs_by_type
+    try:
+        configs = get_configs_by_type(type_key)
+        return {"type": type_key, "configs": configs}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.post("/llm-config/{type_key}")
 async def create_llm_config(type_key: str, data: dict):
     from backend.services.llm_config_service import create_config
     try:
         config = create_config(type_key, data)
         return {"message": "Config created", "config": config}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.put("/llm-config/{type_key}/{config_id}/activate")
+async def activate_llm_config(type_key: str, config_id: str):
+    from backend.services.llm_config_service import set_active_config
+    try:
+        ok = set_active_config(type_key, config_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Config not found")
+        return {"message": "Config activated", "type": type_key, "config_id": config_id}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -1198,18 +1210,6 @@ async def delete_llm_config(type_key: str, config_id: str):
         if not ok:
             raise HTTPException(status_code=404, detail="Config not found")
         return {"message": "Config deleted"}
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@router.put("/llm-config/{type_key}/{config_id}/activate")
-async def activate_llm_config(type_key: str, config_id: str):
-    from backend.services.llm_config_service import set_active_config
-    try:
-        ok = set_active_config(type_key, config_id)
-        if not ok:
-            raise HTTPException(status_code=404, detail="Config not found")
-        return {"message": "Config activated", "type": type_key, "config_id": config_id}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
