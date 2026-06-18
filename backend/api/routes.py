@@ -151,27 +151,68 @@ async def get_model_status():
         if cuda_available:
             free_vram = torch.cuda.mem_get_info()[0] / (1024 * 1024)
             total_vram = torch.cuda.mem_get_info()[1] / (1024 * 1024)
+            used_vram = total_vram - free_vram
+            vram_percent = (used_vram / total_vram * 100) if total_vram > 0 else 0
+            
+            device_count = torch.cuda.device_count()
+            devices = []
+            for i in range(device_count):
+                d_free = torch.cuda.mem_get_info(i)[0] / (1024 * 1024)
+                d_total = torch.cuda.mem_get_info(i)[1] / (1024 * 1024)
+                d_used = d_total - d_free
+                devices.append({
+                    "index": i,
+                    "name": torch.cuda.get_device_name(i),
+                    "free_vram_mb": round(d_free, 2),
+                    "total_vram_mb": round(d_total, 2),
+                    "used_vram_mb": round(d_used, 2),
+                })
+            
             gpu_info = {
                 "cuda_available": True,
                 "device_name": torch.cuda.get_device_name(0),
                 "free_vram_mb": round(free_vram, 2),
                 "total_vram_mb": round(total_vram, 2),
+                "used_vram_mb": round(used_vram, 2),
+                "vram_percent": round(vram_percent, 2),
+                "device_count": device_count,
+                "devices": devices,
             }
         else:
             gpu_info = {"cuda_available": False}
     except Exception as e:
         gpu_info = {"cuda_available": False, "error": str(e)}
     
+    from backend.services.layout_service import (
+        get_yolo_model_memory as _get_yolo_mem,
+    )
+    from backend.services.order_service import (
+        get_surya_model_memory as _get_surya_mem,
+    )
+    
+    yolo_mem = None
+    surya_mem = None
+    try:
+        yolo_mem = _get_yolo_mem()
+    except Exception:
+        pass
+    try:
+        surya_mem = _get_surya_mem()
+    except Exception:
+        pass
+    
     return {
         "yolo": {
             "loaded": is_yolo_model_loaded(),
             "loaded_on_gpu": is_yolo_loaded_on_gpu(),
             "gpu_available": check_gpu_available_for_yolo(),
+            "memory_mb": yolo_mem,
         },
         "surya_order": {
             "loaded": is_surya_model_loaded(),
             "loaded_on_gpu": is_surya_loaded_on_gpu(),
             "gpu_available": check_gpu_available_for_surya(),
+            "memory_mb": surya_mem,
         },
         "gpu": gpu_info,
     }
@@ -1084,6 +1125,93 @@ async def export_page_markdown(page_id: int):
         media_type="text/markdown; charset=utf-8",
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename.encode('utf-8').decode('latin-1')}"}
     )
+
+
+@router.get("/llm-config/types")
+async def get_llm_config_types():
+    from backend.services.llm_config_service import get_model_types
+    return {"model_types": get_model_types()}
+
+
+@router.get("/llm-config")
+async def get_all_llm_configs():
+    from backend.services.llm_config_service import get_all_configs
+    return get_all_configs()
+
+
+@router.get("/llm-config/{type_key}")
+async def get_llm_configs_by_type(type_key: str):
+    from backend.services.llm_config_service import get_configs_by_type
+    try:
+        configs = get_configs_by_type(type_key)
+        return {"type": type_key, "configs": configs}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/llm-config/active")
+async def get_active_llm_config():
+    from backend.services.llm_config_service import get_active_config, get_active_type
+    return {
+        "active_type": get_active_type(),
+        "active_config": get_active_config(),
+    }
+
+
+@router.put("/llm-config/active-type/{type_key}")
+async def set_active_llm_type(type_key: str):
+    from backend.services.llm_config_service import set_active_type
+    try:
+        set_active_type(type_key)
+        return {"message": "Active type updated", "active_type": type_key}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/llm-config/{type_key}")
+async def create_llm_config(type_key: str, data: dict):
+    from backend.services.llm_config_service import create_config
+    try:
+        config = create_config(type_key, data)
+        return {"message": "Config created", "config": config}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.put("/llm-config/{type_key}/{config_id}")
+async def update_llm_config(type_key: str, config_id: str, data: dict):
+    from backend.services.llm_config_service import update_config
+    try:
+        config = update_config(type_key, config_id, data)
+        if config is None:
+            raise HTTPException(status_code=404, detail="Config not found")
+        return {"message": "Config updated", "config": config}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete("/llm-config/{type_key}/{config_id}")
+async def delete_llm_config(type_key: str, config_id: str):
+    from backend.services.llm_config_service import delete_config
+    try:
+        ok = delete_config(type_key, config_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Config not found")
+        return {"message": "Config deleted"}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.put("/llm-config/{type_key}/{config_id}/activate")
+async def activate_llm_config(type_key: str, config_id: str):
+    from backend.services.llm_config_service import set_active_config
+    try:
+        ok = set_active_config(type_key, config_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Config not found")
+        return {"message": "Config activated", "type": type_key, "config_id": config_id}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 

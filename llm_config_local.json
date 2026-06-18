@@ -1,0 +1,11 @@
+{
+  "configs": {
+    "openai": [],
+    "openrouter": [],
+    "claude": [],
+    "qwen": [],
+    "deepseek": [],
+    "llamacpp": []
+  },
+  "active_type": "openai"
+}

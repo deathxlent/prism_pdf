@@ -25,6 +25,26 @@ def is_yolo_loaded_on_gpu() -> bool:
     return _model_loaded_on_gpu
 
 
+def get_yolo_model_memory() -> float:
+    """
+    Get YOLO model memory usage in MB.
+    Returns None if model not loaded or estimation fails.
+    """
+    global _model
+    if _model is None:
+        return None
+    try:
+        total_params = sum(p.numel() for p in _model.model.parameters())
+        param_size_mb = (total_params * 4) / (1024 * 1024)
+        buffer_size_mb = 0
+        for buf in _model.model.buffers():
+            buffer_size_mb += buf.element_size() * buf.nelement()
+        total_mb = param_size_mb + (buffer_size_mb / (1024 * 1024))
+        return round(total_mb, 2)
+    except Exception:
+        return None
+
+
 def check_gpu_available_for_yolo(min_free_vram_mb: int = 3072) -> bool:
     """
     Check if GPU has enough VRAM to load YOLO model.

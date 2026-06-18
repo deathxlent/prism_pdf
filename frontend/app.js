@@ -74,6 +74,10 @@ function handleRoute() {
         $('#page-detail').classList.add('active');
         document.querySelector('.nav-item[data-route="home"]').classList.add('active');
         loadDocumentDetail(parseInt(parts[1]));
+    } else if (route === 'llm-config') {
+        $('#page-llm-config').classList.add('active');
+        document.querySelector('.nav-item[data-route="home"]').classList.add('active');
+        initLlmConfigPage();
     } else {
         navigateTo('home');
     }
@@ -1465,5 +1469,421 @@ function exportDocumentHtmlZip() {
 document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
         closeAnnotationImageModal();
+        closeLlmConfigModal();
     }
 });
+
+$('#llm-config-modal').addEventListener('click', (e) => {
+    if (e.target.id === 'llm-config-modal') {
+        closeLlmConfigModal();
+    }
+});
+
+
+let llmModelTypes = {};
+let llmConfigsData = {};
+let llmCurrentType = 'openai';
+let llmEditingConfigId = null;
+let llmStatusRefreshTimer = null;
+
+function toggleTopMenu() {
+    const dropdown = $('#top-menu-dropdown');
+    dropdown.classList.toggle('show');
+}
+
+function closeTopMenu() {
+    const dropdown = $('#top-menu-dropdown');
+    dropdown.classList.remove('show');
+}
+
+document.addEventListener('click', (e) => {
+    if (!e.target.closest('.top-menu-dropdown')) {
+        closeTopMenu();
+    }
+});
+
+async function initLlmConfigPage() {
+    try {
+        const [typesRes, configsRes] = await Promise.all([
+            fetch(API + '/api/llm-config/types'),
+            fetch(API + '/api/llm-config')
+        ]);
+        const typesData = await typesRes.json();
+        llmModelTypes = typesData.model_types;
+
+        const configsData = await configsRes.json();
+        llmConfigsData = configsData.configs;
+        llmCurrentType = configsData.active_type || 'openai';
+
+        $('#current-active-type').textContent = llmModelTypes[llmCurrentType]?.name || llmCurrentType;
+
+        renderLlmTabs();
+        renderLlmConfigsList();
+        populateConfigTypeSelect();
+        loadResourceStatus();
+
+        if (llmStatusRefreshTimer) {
+            clearInterval(llmStatusRefreshTimer);
+        }
+        llmStatusRefreshTimer = setInterval(loadResourceStatus, 5000);
+    } catch (e) {
+        console.error('Failed to init LLM config page:', e);
+        alert('加载配置失败: ' + e.message);
+    }
+}
+
+async function loadResourceStatus() {
+    try {
+        const res = await fetch(API + '/api/model-status');
+        const data = await res.json();
+        renderResourceStatus(data);
+    } catch (e) {
+        console.error('Failed to load model status:', e);
+    }
+}
+
+function renderResourceStatus(data) {
+    const gpu = data.gpu || {};
+    const yolo = data.yolo || {};
+    const surya = data.surya_order || {};
+
+    if (gpu.cuda_available) {
+        const deviceName = gpu.device_name || 'Unknown GPU';
+        const free = gpu.free_vram_mb || 0;
+        const total = gpu.total_vram_mb || 0;
+        const used = gpu.used_vram_mb || (total - free);
+        const percent = gpu.vram_percent || ((used / total) * 100);
+        $('#gpu-status-text').html = '';
+        $('#gpu-status-text').innerHTML = `
+            <strong>${deviceName}</strong><br>
+            已用: ${used.toFixed(0)} MB / ${total.toFixed(0)} MB
+        `;
+        const bar = $('#gpu-vram-bar');
+        bar.classList.remove('hidden');
+        const fill = bar.querySelector('.gpu-fill');
+        fill.style.width = percent.toFixed(1) + '%';
+        if (percent > 85) {
+            fill.style.background = '#dc2626';
+        } else if (percent > 65) {
+            fill.style.background = '#d97706';
+        } else {
+            fill.style.background = '#059669';
+        }
+    } else {
+        $('#gpu-status-text').innerHTML = `<strong>CPU 模式</strong><br>CUDA 不可用`;
+        $('#gpu-vram-bar').classList.add('hidden');
+    }
+
+    let yoloStatus = '';
+    let yoloMem = '';
+    if (yolo.loaded) {
+        yoloStatus = yolo.loaded_on_gpu
+            ? '<span class="status-ok"><i class="fas fa-check-circle"></i> 已加载 (GPU)</span>'
+            : '<span class="status-warn"><i class="fas fa-check-circle"></i> 已加载 (CPU)</span>';
+        if (yolo.memory_mb) {
+            yoloMem = `占用: ${yolo.memory_mb.toFixed(0)} MB`;
+        }
+    } else {
+        yoloStatus = '<span class="status-off"><i class="fas fa-circle-notch"></i> 未加载</span>';
+    }
+    $('#yolo-status-text').innerHTML = yoloStatus;
+    $('#yolo-mem-text').textContent = yoloMem;
+
+    let suryaStatus = '';
+    let suryaMem = '';
+    if (surya.loaded) {
+        suryaStatus = surya.loaded_on_gpu
+            ? '<span class="status-ok"><i class="fas fa-check-circle"></i> 已加载 (GPU)</span>'
+            : '<span class="status-warn"><i class="fas fa-check-circle"></i> 已加载 (CPU)</span>';
+        if (surya.memory_mb) {
+            suryaMem = `占用: ${surya.memory_mb.toFixed(0)} MB`;
+        }
+    } else {
+        suryaStatus = '<span class="status-off"><i class="fas fa-circle-notch"></i> 未加载</span>';
+    }
+    $('#surya-status-text').innerHTML = suryaStatus;
+    $('#surya-mem-text').textContent = suryaMem;
+}
+
+function renderLlmTabs() {
+    const tabsContainer = $('#llm-tabs');
+    const tabsHtml = Object.entries(llmModelTypes).map(([key, info]) => {
+        const configs = llmConfigsData[key] || [];
+        const activeConfig = configs.find(c => c.is_active);
+        const isActive = key === llmCurrentType;
+        return `
+            <div class="llm-tab ${isActive ? 'active' : ''}" 
+                 data-type="${key}" 
+                 onclick="switchLlmTab('${key}')">
+                <i class="fas ${info.icon}"></i>
+                <span class="llm-tab-name">${info.name}</span>
+                ${activeConfig ? '<span class="llm-tab-active-dot" title="有激活配置"></span>' : ''}
+                <span class="llm-tab-count">${configs.length}</span>
+            </div>
+        `;
+    }).join('');
+    tabsContainer.innerHTML = tabsHtml;
+}
+
+function switchLlmTab(typeKey) {
+    llmCurrentType = typeKey;
+    $('#current-active-type').textContent = llmModelTypes[typeKey]?.name || typeKey;
+    renderLlmTabs();
+    renderLlmConfigsList();
+}
+
+function renderLlmConfigsList() {
+    const typeInfo = llmModelTypes[llmCurrentType];
+    const configs = llmConfigsData[llmCurrentType] || [];
+    const listContainer = $('#llm-config-list');
+    const tabInfo = $('#tab-type-info');
+
+    tabInfo.innerHTML = `
+        <i class="fas ${typeInfo.icon}"></i>
+        ${typeInfo.name}
+        ${typeInfo.supports_vision 
+            ? '<span class="vision-badge"><i class="fas fa-eye"></i> 类型默认支持图生文</span>' 
+            : '<span class="no-vision-badge"><i class="fas fa-eye-slash"></i> 类型默认不支持图生文</span>'}
+    `;
+
+    if (configs.length === 0) {
+        listContainer.innerHTML = `
+            <div class="llm-empty">
+                <i class="fas fa-inbox"></i>
+                <p>暂无 ${typeInfo.name} 配置</p>
+                <p class="llm-empty-hint">点击右上角"新建配置"按钮创建一个配置</p>
+            </div>
+        `;
+        return;
+    }
+
+    listContainer.innerHTML = configs.map(cfg => {
+        const isActive = cfg.is_active;
+        return `
+            <div class="llm-config-card ${isActive ? 'active' : ''}">
+                <div class="llm-config-card-header">
+                    <div class="llm-config-title">
+                        ${isActive ? '<span class="active-badge"><i class="fas fa-star"></i> 生效中</span>' : ''}
+                        <h3><i class="fas ${typeInfo.icon}"></i> ${escapeHtml(cfg.name)}</h3>
+                        ${cfg.supports_vision ? '<span class="vision-tag"><i class="fas fa-eye"></i> 支持图生文</span>' : ''}
+                    </div>
+                    <div class="llm-config-actions">
+                        ${!isActive ? `
+                            <button class="btn btn-success btn-sm" onclick="activateLlmConfig('${cfg.id}')">
+                                <i class="fas fa-check"></i> 设为生效
+                            </button>
+                        ` : ''}
+                        <button class="btn btn-outline btn-sm" onclick="openEditConfigModal('${cfg.id}')">
+                            <i class="fas fa-edit"></i> 编辑
+                        </button>
+                        <button class="btn btn-danger btn-sm" onclick="deleteLlmConfig('${cfg.id}')">
+                            <i class="fas fa-trash"></i> 删除
+                        </button>
+                    </div>
+                </div>
+                <div class="llm-config-card-body">
+                    <div class="config-field">
+                        <span class="config-label">模型名称</span>
+                        <span class="config-value">${escapeHtml(cfg.model || '-')}</span>
+                    </div>
+                    <div class="config-field">
+                        <span class="config-label">Base URL</span>
+                        <span class="config-value config-url">${escapeHtml(cfg.base_url || '-')}</span>
+                    </div>
+                    <div class="config-field">
+                        <span class="config-label">API Key</span>
+                        <span class="config-value">${cfg.api_key ? '••••••••' + cfg.api_key.slice(-4) : '未设置'}</span>
+                    </div>
+                    <div class="config-field-row">
+                        <div class="config-field">
+                            <span class="config-label">Temperature</span>
+                            <span class="config-value">${cfg.temperature}</span>
+                        </div>
+                        <div class="config-field">
+                            <span class="config-label">Max Tokens</span>
+                            <span class="config-value">${cfg.max_tokens}</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="llm-config-card-footer">
+                    <span class="config-meta">创建: ${formatDateTime(cfg.created_at)}</span>
+                    <span class="config-meta">更新: ${formatDateTime(cfg.updated_at)}</span>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function populateConfigTypeSelect() {
+    const select = $('#llm-config-type');
+    select.innerHTML = Object.entries(llmModelTypes).map(([key, info]) => `
+        <option value="${key}">${info.name}</option>
+    `).join('');
+}
+
+function openCreateConfigModal() {
+    llmEditingConfigId = null;
+    $('#llm-config-modal-title').textContent = '新建配置';
+    $('#llm-config-name').value = '';
+    $('#llm-config-type').value = llmCurrentType;
+    const defaults = llmModelTypes[llmCurrentType].defaults;
+    $('#llm-config-base-url').value = defaults.base_url || '';
+    $('#llm-config-api-key').value = defaults.api_key || '';
+    $('#llm-config-model').value = defaults.model || '';
+    $('#llm-config-temperature').value = defaults.temperature ?? 0.7;
+    $('#llm-config-max-tokens').value = defaults.max_tokens ?? 4096;
+    $('#llm-config-supports-vision').checked = !!llmModelTypes[llmCurrentType].supports_vision;
+    $('#llm-config-modal').classList.remove('hidden');
+}
+
+function openEditConfigModal(configId) {
+    const configs = llmConfigsData[llmCurrentType] || [];
+    const cfg = configs.find(c => c.id === configId);
+    if (!cfg) return;
+
+    llmEditingConfigId = configId;
+    $('#llm-config-modal-title').textContent = '编辑配置';
+    $('#llm-config-name').value = cfg.name || '';
+    $('#llm-config-type').value = cfg.type || llmCurrentType;
+    $('#llm-config-base-url').value = cfg.base_url || '';
+    $('#llm-config-api-key').value = cfg.api_key || '';
+    $('#llm-config-model').value = cfg.model || '';
+    $('#llm-config-temperature').value = cfg.temperature ?? 0.7;
+    $('#llm-config-max-tokens').value = cfg.max_tokens ?? 4096;
+    $('#llm-config-supports-vision').checked = !!cfg.supports_vision;
+    $('#llm-config-modal').classList.remove('hidden');
+}
+
+function closeLlmConfigModal() {
+    $('#llm-config-modal').classList.add('hidden');
+    llmEditingConfigId = null;
+}
+
+function onLlmConfigTypeChange() {
+    const typeKey = $('#llm-config-type').value;
+    const defaults = llmModelTypes[typeKey]?.defaults || {};
+    if (!llmEditingConfigId) {
+        if (defaults.base_url && !$('#llm-config-base-url').value) {
+            $('#llm-config-base-url').value = defaults.base_url;
+        }
+        if (defaults.model && !$('#llm-config-model').value) {
+            $('#llm-config-model').value = defaults.model;
+        }
+        if (defaults.temperature !== undefined) {
+            $('#llm-config-temperature').value = defaults.temperature;
+        }
+        if (defaults.max_tokens !== undefined) {
+            $('#llm-config-max-tokens').value = defaults.max_tokens;
+        }
+        $('#llm-config-supports-vision').checked = !!llmModelTypes[typeKey]?.supports_vision;
+    }
+}
+
+async function saveLlmConfig() {
+    const name = $('#llm-config-name').value.trim();
+    if (!name) {
+        alert('请输入配置名称');
+        return;
+    }
+
+    const typeKey = $('#llm-config-type').value;
+    const data = {
+        name: name,
+        base_url: $('#llm-config-base-url').value.trim(),
+        api_key: $('#llm-config-api-key').value.trim(),
+        model: $('#llm-config-model').value.trim(),
+        temperature: parseFloat($('#llm-config-temperature').value),
+        max_tokens: parseInt($('#llm-config-max-tokens').value),
+        supports_vision: $('#llm-config-supports-vision').checked,
+    };
+
+    try {
+        let url, method;
+        if (llmEditingConfigId) {
+            url = `${API}/api/llm-config/${typeKey}/${llmEditingConfigId}`;
+            method = 'PUT';
+        } else {
+            url = `${API}/api/llm-config/${typeKey}`;
+            method = 'POST';
+        }
+
+        const res = await fetch(url, {
+            method: method,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.detail || '保存失败');
+        }
+
+        await refreshLlmConfigs();
+        closeLlmConfigModal();
+        alert('保存成功');
+    } catch (e) {
+        alert('保存失败: ' + e.message);
+    }
+}
+
+async function deleteLlmConfig(configId) {
+    if (!confirm('确定要删除此配置吗？')) return;
+
+    try {
+        const res = await fetch(`${API}/api/llm-config/${llmCurrentType}/${configId}`, {
+            method: 'DELETE'
+        });
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.detail || '删除失败');
+        }
+        await refreshLlmConfigs();
+        alert('删除成功');
+    } catch (e) {
+        alert('删除失败: ' + e.message);
+    }
+}
+
+async function activateLlmConfig(configId) {
+    try {
+        const res = await fetch(`${API}/api/llm-config/${llmCurrentType}/${configId}/activate`, {
+            method: 'PUT'
+        });
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.detail || '激活失败');
+        }
+        await refreshLlmConfigs();
+        alert('已设为生效配置');
+    } catch (e) {
+        alert('激活失败: ' + e.message);
+    }
+}
+
+async function refreshLlmConfigs() {
+    try {
+        const res = await fetch(API + '/api/llm-config');
+        const data = await res.json();
+        llmConfigsData = data.configs;
+        llmCurrentType = data.active_type || llmCurrentType;
+        $('#current-active-type').textContent = llmModelTypes[llmCurrentType]?.name || llmCurrentType;
+        renderLlmTabs();
+        renderLlmConfigsList();
+    } catch (e) {
+        console.error('Failed to refresh LLM configs:', e);
+    }
+}
+
+function togglePasswordVisibility(inputId, btn) {
+    const input = document.getElementById(inputId);
+    const icon = btn.querySelector('i');
+    if (input.type === 'password') {
+        input.type = 'text';
+        icon.classList.remove('fa-eye');
+        icon.classList.add('fa-eye-slash');
+    } else {
+        input.type = 'password';
+        icon.classList.remove('fa-eye-slash');
+        icon.classList.add('fa-eye');
+    }
+}

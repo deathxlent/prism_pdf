@@ -22,6 +22,21 @@
                     </a>
                 </li>
             </ul>
+            <div class="navbar-right">
+                <div class="top-menu-dropdown">
+                    <button class="top-menu-btn" id="top-menu-btn" onclick="toggleTopMenu()">
+                        <i class="fas fa-sliders-h"></i>
+                        <span>系统管理</span>
+                        <i class="fas fa-chevron-down"></i>
+                    </button>
+                    <div class="top-menu-dropdown-content" id="top-menu-dropdown">
+                        <a href="#/llm-config" onclick="closeTopMenu()">
+                            <i class="fas fa-cog"></i>
+                            <span>大模型配置管理</span>
+                        </a>
+                    </div>
+                </div>
+            </div>
         </div>
     </nav>
 
@@ -144,6 +159,70 @@
                 </div>
             </div>
         </div>
+
+        <div id="page-llm-config" class="page">
+            <div class="llm-config-header">
+                <button class="btn btn-outline" onclick="navigateTo('home')">
+                    <i class="fas fa-arrow-left"></i> 返回
+                </button>
+                <h2><i class="fas fa-cog"></i> 大语言模型配置管理</h2>
+                <div class="llm-active-type-display">
+                    <i class="fas fa-check-circle"></i>
+                    <span>当前使用类型：</span>
+                    <span id="current-active-type" class="active-type-badge">-</span>
+                </div>
+            </div>
+
+            <div id="resource-status-bar" class="resource-status-bar">
+                <div class="resource-card gpu-card">
+                    <div class="resource-icon"><i class="fas fa-microchip"></i></div>
+                    <div class="resource-info">
+                        <div class="resource-title">GPU 显存</div>
+                        <div id="gpu-status-text" class="resource-value">检测中...</div>
+                        <div id="gpu-vram-bar" class="resource-bar hidden">
+                            <div class="resource-bar-fill gpu-fill"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="resource-card yolo-card">
+                    <div class="resource-icon"><i class="fas fa-crosshairs"></i></div>
+                    <div class="resource-info">
+                        <div class="resource-title">YOLO 布局模型</div>
+                        <div id="yolo-status-text" class="resource-value">检测中...</div>
+                        <div id="yolo-mem-text" class="resource-subvalue"></div>
+                    </div>
+                </div>
+                <div class="resource-card surya-card">
+                    <div class="resource-icon"><i class="fas fa-sort-amount-down"></i></div>
+                    <div class="resource-info">
+                        <div class="resource-title">Surya 排序模型</div>
+                        <div id="surya-status-text" class="resource-value">检测中...</div>
+                        <div id="surya-mem-text" class="resource-subvalue"></div>
+                    </div>
+                </div>
+                <button class="btn btn-outline btn-refresh" onclick="loadResourceStatus()">
+                    <i class="fas fa-sync-alt"></i> 刷新
+                </button>
+            </div>
+
+            <div class="llm-config-container">
+                <div class="llm-tabs" id="llm-tabs">
+                </div>
+
+                <div class="llm-tab-content">
+                    <div class="llm-config-actions">
+                        <button class="btn btn-success" onclick="openCreateConfigModal()">
+                            <i class="fas fa-plus"></i> 新建配置
+                        </button>
+                        <span id="tab-type-info" class="tab-type-info"></span>
+                    </div>
+
+                    <div id="llm-config-list" class="llm-config-list">
+                    </div>
+                </div>
+            </div>
+        </div>
+
     </main>
 
     <div id="edit-modal" class="modal hidden">
@@ -268,6 +347,63 @@
             </div>
             <div class="modal-footer">
                 <button class="btn btn-outline" onclick="closeAnnotationImageModal()">关闭</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="llm-config-modal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="llm-config-modal-title">新建配置</h3>
+                <button class="modal-close" onclick="closeLlmConfigModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>配置名称</label>
+                    <input type="text" id="llm-config-name" class="form-control" placeholder="请输入配置名称">
+                </div>
+                <div class="form-group">
+                    <label>模型类型</label>
+                    <select id="llm-config-type" class="form-control" onchange="onLlmConfigTypeChange()">
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Base URL</label>
+                    <input type="text" id="llm-config-base-url" class="form-control" placeholder="https://api.example.com/v1">
+                </div>
+                <div class="form-group">
+                    <label>API Key</label>
+                    <div class="input-with-toggle">
+                        <input type="password" id="llm-config-api-key" class="form-control" placeholder="sk-...">
+                        <button type="button" class="toggle-password-btn" onclick="togglePasswordVisibility('llm-config-api-key', this)">
+                            <i class="fas fa-eye"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>模型名称</label>
+                    <input type="text" id="llm-config-model" class="form-control" placeholder="gpt-4o">
+                </div>
+                <div class="form-row">
+                    <div class="form-group half">
+                        <label>Temperature</label>
+                        <input type="number" id="llm-config-temperature" class="form-control" step="0.1" min="0" max="2" value="0.7">
+                    </div>
+                    <div class="form-group half">
+                        <label>Max Tokens</label>
+                        <input type="number" id="llm-config-max-tokens" class="form-control" min="1" value="4096">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="llm-config-supports-vision">
+                        <span>支持图生文 (Vision) 功能</span>
+                    </label>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" onclick="closeLlmConfigModal()">取消</button>
+                <button class="btn btn-primary" onclick="saveLlmConfig()">保存</button>
             </div>
         </div>
     </div>

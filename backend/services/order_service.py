@@ -24,6 +24,26 @@ def is_surya_loaded_on_gpu() -> bool:
     return _order_model_loaded_on_gpu
 
 
+def get_surya_model_memory() -> float:
+    """
+    Get Surya model memory usage in MB.
+    Returns None if model not loaded or estimation fails.
+    """
+    global _order_model
+    if _order_model is None:
+        return None
+    try:
+        total_params = sum(p.numel() for p in _order_model.parameters())
+        param_size_mb = (total_params * 4) / (1024 * 1024)
+        buffer_size_mb = 0
+        for buf in _order_model.buffers():
+            buffer_size_mb += buf.element_size() * buf.nelement()
+        total_mb = param_size_mb + (buffer_size_mb / (1024 * 1024))
+        return round(total_mb, 2)
+    except Exception:
+        return None
+
+
 def reset_cuda_corrupted_state():
     global _cuda_corrupted
     if _cuda_corrupted:
