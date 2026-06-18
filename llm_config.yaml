@@ -1,0 +1,49 @@
+active_provider: llamacpp
+providers:
+  openai:
+    configs:
+    - name: GPT-4o
+      api_key: ''
+      model: gpt-4o
+      base_url: https://api.openai.com/v1
+      supports_vision: true
+      active: false
+  openrouter:
+    configs:
+    - name: Default
+      api_key: ''
+      model: ''
+      base_url: https://openrouter.ai/api/v1
+      supports_vision: false
+      active: false
+  claude:
+    configs:
+    - name: Claude 3.5 Sonnet
+      api_key: ''
+      model: claude-3-5-sonnet-20241022
+      base_url: https://api.anthropic.com
+      supports_vision: true
+      active: false
+  qwen:
+    configs:
+    - name: Qwen-VL-Max
+      api_key: ''
+      model: qwen-vl-max
+      base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+      supports_vision: true
+      active: false
+  deepseek:
+    configs:
+    - name: DeepSeek Chat
+      api_key: ''
+      model: deepseek-chat
+      base_url: https://api.deepseek.com/v1
+      supports_vision: false
+      active: false
+  llamacpp:
+    configs:
+    - name: PaddleOCR-VL
+      server_url: http://127.0.0.1:8080
+      model_name: PaddleOCR-VL-1.6.Q4_K_M.gguf
+      supports_vision: true
+      active: true

@@ -16,7 +16,6 @@ from backend import database as db
 from backend.services.parse_service import process_upload, process_document, get_parse_results, get_parse_progress, TEXT_TYPES
 from backend.services.layout_service import get_raw_layout_data, generate_layout_annotation_image
 from backend.services.order_service import assign_reading_order, check_gpu_available_for_surya, reset_surya_state
-from backend.services import llm_config_service
 
 logger = logging.getLogger(__name__)
 
@@ -1085,94 +1084,6 @@ async def export_page_markdown(page_id: int):
         media_type="text/markdown; charset=utf-8",
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename.encode('utf-8').decode('latin-1')}"}
     )
-
-
-@router.get("/llm-config")
-async def get_llm_config():
-    config = llm_config_service.load_config()
-    masked = _mask_api_keys(config)
-    return masked
-
-
-@router.get("/llm-config/active")
-async def get_llm_active_config():
-    active = llm_config_service.get_active_config()
-    if not active:
-        return {"active_config": None}
-    masked = _mask_single_config(active)
-    return {"active_config": masked}
-
-
-@router.put("/llm-config/active")
-async def set_llm_active(data: dict):
-    provider_type = data.get("provider_type")
-    config_name = data.get("config_name")
-    if not provider_type or not config_name:
-        raise HTTPException(status_code=400, detail="provider_type and config_name are required")
-    try:
-        config = llm_config_service.set_active(provider_type, config_name)
-        return _mask_api_keys(config)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@router.put("/llm-config/{provider_type}/{config_name}")
-async def update_llm_provider_config(provider_type: str, config_name: str, data: dict):
-    try:
-        config = llm_config_service.update_provider_config(provider_type, config_name, data)
-        return _mask_api_keys(config)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@router.post("/llm-config/{provider_type}")
-async def add_llm_provider_config(provider_type: str, data: dict):
-    try:
-        config = llm_config_service.add_provider_config(provider_type, data)
-        return _mask_api_keys(config)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@router.delete("/llm-config/{provider_type}/{config_name}")
-async def delete_llm_provider_config(provider_type: str, config_name: str):
-    try:
-        config = llm_config_service.delete_provider_config(provider_type, config_name)
-        return _mask_api_keys(config)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@router.post("/llm-config/reload")
-async def reload_llm_config():
-    config = llm_config_service.reload_config()
-    return _mask_api_keys(config)
-
-
-def _mask_api_keys(config: dict) -> dict:
-    import copy
-    masked = copy.deepcopy(config)
-    providers = masked.get("providers", {})
-    for provider_name, provider in providers.items():
-        for cfg in provider.get("configs", []):
-            _mask_single_config_inplace(cfg)
-    return masked
-
-
-def _mask_single_config(cfg: dict) -> dict:
-    import copy
-    masked = copy.deepcopy(cfg)
-    _mask_single_config_inplace(masked)
-    return masked
-
-
-def _mask_single_config_inplace(cfg: dict):
-    if "api_key" in cfg and cfg["api_key"]:
-        key = cfg["api_key"]
-        if len(key) > 8:
-            cfg["api_key"] = key[:4] + "*" * (len(key) - 8) + key[-4:]
-        else:
-            cfg["api_key"] = "****"
 
 
 
