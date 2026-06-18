@@ -4,3 +4,4 @@ models/
 __pycache__/
 .env
 *.db
+llm_config.yaml
