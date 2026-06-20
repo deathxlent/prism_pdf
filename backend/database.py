@@ -1,6 +1,42 @@
 import aiosqlite
+import re
 from datetime import datetime
 from backend.config import DB_PATH
+
+# FTS5 full-text search: try ngram tokenizer (CJK-friendly), fall back to unicode61
+FTS5_CREATE_NGRAM = """
+CREATE VIRTUAL TABLE IF NOT EXISTS page_elements_fts USING fts5(
+    content,
+    content=page_elements,
+    content_rowid=id,
+    tokenize='ngram 1 6'
+)
+"""
+
+FTS5_CREATE_UNICODE61 = """
+CREATE VIRTUAL TABLE IF NOT EXISTS page_elements_fts USING fts5(
+    content,
+    content=page_elements,
+    content_rowid=id
+)
+"""
+
+FTS5_TRIGGERS = """
+CREATE TRIGGER IF NOT EXISTS page_elements_ai AFTER INSERT ON page_elements WHEN new.content IS NOT NULL BEGIN
+    INSERT INTO page_elements_fts(rowid, content) VALUES (new.id, new.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS page_elements_ad AFTER DELETE ON page_elements WHEN old.content IS NOT NULL BEGIN
+    INSERT INTO page_elements_fts(page_elements_fts, rowid, content) VALUES('delete', old.id, old.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS page_elements_au AFTER UPDATE OF content ON page_elements
+WHEN old.content IS NOT NULL OR new.content IS NOT NULL
+BEGIN
+    INSERT INTO page_elements_fts(page_elements_fts, rowid, content) VALUES('delete', old.id, old.content);
+    INSERT INTO page_elements_fts(rowid, content) VALUES (new.id, new.content);
+END;
+"""
 
 CREATE_TABLES_SQL = """
 CREATE TABLE IF NOT EXISTS pdf_documents (
@@ -89,6 +125,27 @@ async def init_db():
             await db.execute("ALTER TABLE pdf_pages ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''")
         except aiosqlite.OperationalError:
             pass
+
+        # Create FTS5 virtual table for full-text search
+        try:
+            await db.execute(FTS5_CREATE_NGRAM)
+        except aiosqlite.OperationalError:
+            await db.execute(FTS5_CREATE_UNICODE61)
+
+        # Create triggers to keep FTS index in sync with page_elements
+        await db.executescript(FTS5_TRIGGERS)
+
+        # Rebuild FTS index for existing data if FTS table is empty
+        cursor = await db.execute("SELECT COUNT(*) FROM page_elements_fts")
+        fts_count = (await cursor.fetchone())[0]
+        if fts_count == 0:
+            cursor = await db.execute("SELECT COUNT(*) FROM page_elements WHERE content IS NOT NULL")
+            source_count = (await cursor.fetchone())[0]
+            if source_count > 0:
+                await db.execute("""
+                    INSERT INTO page_elements_fts(rowid, content)
+                    SELECT id, content FROM page_elements WHERE content IS NOT NULL
+                """)
         
         await db.commit()
 
@@ -249,17 +306,77 @@ async def get_element(element_id: int) -> dict | None:
         return dict(row) if row else None
 
 
+def _sanitize_fts_query(keyword: str) -> str | None:
+    """Convert a user keyword into a safe FTS5 MATCH query string.
+
+    - If the query already contains FTS5 syntax characters (" * ( ) | &), pass through.
+    - If it contains FTS5 operator words (AND, OR, NOT, NEAR), pass through.
+    - Otherwise, wrap as a phrase query for exact token matching.
+    Returns None for empty input.
+    """
+    keyword = keyword.strip()
+    if not keyword:
+        return None
+
+    # Contains explicit FTS5 syntax → trust the user
+    if any(c in keyword for c in '"*()|&'):
+        return keyword
+
+    # Contains FTS5 operator words → pass through
+    tokens = keyword.split()
+    for t in tokens:
+        if t.upper() in ("AND", "OR", "NOT", "NEAR"):
+            return keyword
+
+    # Escape any double quotes inside the keyword
+    safe = keyword.replace('"', '""')
+    return f'"{safe}"'
+
+
 async def search_elements(doc_id: int, keyword: str) -> list[dict]:
+    """Search document elements using FTS5 full-text index.
+
+    Falls back to LIKE substring search if the FTS5 query fails
+    (e.g. CJK characters with unicode61 tokenizer).
+    """
+    keyword = keyword.strip()
+    if not keyword:
+        return []
+
     async with aiosqlite.connect(str(DB_PATH)) as db:
         db.row_factory = aiosqlite.Row
+
+        # Try FTS5 MATCH first
+        fts_query = _sanitize_fts_query(keyword)
+        if fts_query:
+            try:
+                cursor = await db.execute(
+                    """
+                    SELECT pe.*, pp.page_number
+                    FROM page_elements_fts
+                    JOIN page_elements pe ON page_elements_fts.rowid = pe.id
+                    JOIN pdf_pages pp ON pe.page_id = pp.id
+                    WHERE pp.document_id = ?
+                      AND page_elements_fts MATCH ?
+                    ORDER BY rank, pp.page_number, pe.reading_order
+                    """,
+                    (doc_id, fts_query),
+                )
+                rows = await cursor.fetchall()
+                if rows:
+                    return [dict(r) for r in rows]
+            except aiosqlite.OperationalError:
+                pass  # FTS5 query failed, fall through to LIKE
+
+        # Fallback: LIKE substring search (handles CJK / tokenizer limitations)
         cursor = await db.execute(
             """
-            SELECT pe.*, pp.page_number 
-            FROM page_elements pe 
-            JOIN pdf_pages pp ON pe.page_id = pp.id 
-            WHERE pp.document_id = ? 
-              AND pe.content IS NOT NULL 
-              AND pe.content LIKE ? 
+            SELECT pe.*, pp.page_number
+            FROM page_elements pe
+            JOIN pdf_pages pp ON pe.page_id = pp.id
+            WHERE pp.document_id = ?
+              AND pe.content IS NOT NULL
+              AND pe.content LIKE ?
             ORDER BY pp.page_number, pe.reading_order
             """,
             (doc_id, f"%{keyword}%"),
