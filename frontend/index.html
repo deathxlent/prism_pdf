@@ -108,6 +108,13 @@
                 </div>
                 <div class="detail-col detail-col-pdf">
                     <div class="pdf-header">
+                        <div class="pdf-search-container">
+                            <div class="pdf-search-box">
+                                <i class="fas fa-search"></i>
+                                <input type="text" id="pdf-search-input" placeholder="搜索解析内容..." onkeyup="handleSearchKeyUp(event)">
+                                <span id="search-count" class="search-count hidden">0 结果</span>
+                            </div>
+                        </div>
                         <span id="pdf-page-info">第 1 页</span>
                         <div class="pdf-header-actions">
                             <span id="unordered-badge" class="unordered-badge hidden" title="该页未经过Surya排序">
@@ -405,6 +412,16 @@
                 <button class="btn btn-outline" onclick="closeLlmConfigModal()">取消</button>
                 <button class="btn btn-primary" onclick="saveLlmConfig()">保存</button>
             </div>
+        </div>
+    </div>
+
+    <div id="search-results-panel" class="search-results-panel hidden">
+        <div class="search-results-header" id="search-results-header">
+            <span class="search-results-title"><i class="fas fa-search"></i> 搜索结果</span>
+            <button class="search-results-close" onclick="closeSearchResults()">&times;</button>
+        </div>
+        <div class="search-results-body" id="search-results-body">
+            <div class="search-results-empty">请输入关键词进行搜索</div>
         </div>
     </div>
 

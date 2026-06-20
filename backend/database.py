@@ -249,6 +249,25 @@ async def get_element(element_id: int) -> dict | None:
         return dict(row) if row else None
 
 
+async def search_elements(doc_id: int, keyword: str) -> list[dict]:
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT pe.*, pp.page_number 
+            FROM page_elements pe 
+            JOIN pdf_pages pp ON pe.page_id = pp.id 
+            WHERE pp.document_id = ? 
+              AND pe.content IS NOT NULL 
+              AND pe.content LIKE ? 
+            ORDER BY pp.page_number, pe.reading_order
+            """,
+            (doc_id, f"%{keyword}%"),
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+
 add_element = create_element
 add_page = create_page
 add_document = create_document

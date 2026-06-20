@@ -420,6 +420,16 @@ async function loadDocumentDetail(docId) {
     currentPageIndex = 0;
     activeElementId = null;
     isEditOrderMode = false;
+    
+    searchResults = [];
+    currentSearchIndex = -1;
+    if ($('#pdf-search-input')) {
+        $('#pdf-search-input').value = '';
+    }
+    if ($('#search-count')) {
+        $('#search-count').classList.add('hidden');
+    }
+    closeSearchResults();
 
     if (progressPollInterval) {
         clearInterval(progressPollInterval);
@@ -505,6 +515,7 @@ async function loadPage(index) {
         toggleAddElementMode();
     }
     clearSelection();
+    clearSearchHighlights();
 
     try {
         const res = await fetch(API + '/api/pages/' + page.id + '/elements');
@@ -1885,5 +1896,237 @@ function togglePasswordVisibility(inputId, btn) {
         input.type = 'password';
         icon.classList.remove('fa-eye-slash');
         icon.classList.add('fa-eye');
+    }
+}
+
+let searchResults = [];
+let currentSearchIndex = -1;
+let searchDebounceTimer = null;
+let isSearchPanelDragging = false;
+let dragOffset = { x: 0, y: 0 };
+
+function handleSearchKeyUp(event) {
+    if (event.key === 'Enter') {
+        clearTimeout(searchDebounceTimer);
+        performSearch();
+    } else {
+        clearTimeout(searchDebounceTimer);
+        searchDebounceTimer = setTimeout(() => {
+            performSearch();
+        }, 300);
+    }
+}
+
+async function performSearch() {
+    const keyword = $('#pdf-search-input').value.trim();
+    const countEl = $('#search-count');
+    
+    if (!keyword) {
+        searchResults = [];
+        currentSearchIndex = -1;
+        countEl.classList.add('hidden');
+        closeSearchResults();
+        clearSearchHighlights();
+        return;
+    }
+
+    if (!currentDocId) {
+        return;
+    }
+
+    try {
+        const res = await fetch(`${API}/api/documents/${currentDocId}/search?q=${encodeURIComponent(keyword)}`);
+        const data = await res.json();
+        searchResults = data.results || [];
+        currentSearchIndex = searchResults.length > 0 ? 0 : -1;
+
+        countEl.textContent = `${searchResults.length} 结果`;
+        countEl.classList.remove('hidden');
+
+        if (searchResults.length > 0) {
+            renderSearchResults(keyword);
+            showSearchResults();
+        } else {
+            renderSearchResults(keyword);
+            showSearchResults();
+        }
+    } catch (e) {
+        console.error('Search failed:', e);
+    }
+}
+
+function renderSearchResults(keyword) {
+    const body = $('#search-results-body');
+    
+    if (searchResults.length === 0) {
+        body.innerHTML = '<div class="search-results-empty">未找到匹配的内容</div>';
+        return;
+    }
+
+    body.innerHTML = searchResults.map((result, index) => {
+        const content = result.content || '';
+        const highlightedContent = highlightKeyword(content, keyword);
+        const isActive = index === currentSearchIndex;
+        
+        return `
+            <div class="search-result-item ${isActive ? 'active' : ''}" 
+                 data-index="${index}" 
+                 onclick="goToSearchResult(${index})">
+                <div class="search-result-header">
+                    <span class="search-result-type">${escapeHtml(result.element_type)}</span>
+                    <span class="search-result-page">第 ${result.page_number} 页</span>
+                </div>
+                <div class="search-result-content">${highlightedContent}</div>
+            </div>
+        `;
+    }).join('');
+}
+
+function highlightKeyword(text, keyword) {
+    if (!keyword || !text) return escapeHtml(text || '');
+    
+    const regex = new RegExp(`(${escapeRegExp(keyword)})`, 'gi');
+    return escapeHtml(text).replace(regex, '<mark>$1</mark>');
+}
+
+function escapeRegExp(string) {
+    return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function showSearchResults() {
+    const panel = $('#search-results-panel');
+    panel.classList.remove('hidden');
+    setupSearchPanelDrag();
+}
+
+function closeSearchResults() {
+    $('#search-results-panel').classList.add('hidden');
+    clearSearchHighlights();
+}
+
+function setupSearchPanelDrag() {
+    const header = $('#search-results-header');
+    const panel = $('#search-results-panel');
+    
+    header.onmousedown = function(e) {
+        isSearchPanelDragging = true;
+        const rect = panel.getBoundingClientRect();
+        dragOffset.x = e.clientX - rect.left;
+        dragOffset.y = e.clientY - rect.top;
+        panel.style.right = 'auto';
+        panel.style.left = rect.left + 'px';
+        panel.style.top = rect.top + 'px';
+        
+        document.addEventListener('mousemove', onDragMove);
+        document.addEventListener('mouseup', onDragEnd);
+    };
+}
+
+function onDragMove(e) {
+    if (!isSearchPanelDragging) return;
+    
+    const panel = $('#search-results-panel');
+    const newX = e.clientX - dragOffset.x;
+    const newY = e.clientY - dragOffset.y;
+    
+    const maxX = window.innerWidth - panel.offsetWidth;
+    const maxY = window.innerHeight - panel.offsetHeight;
+    
+    panel.style.left = Math.max(0, Math.min(newX, maxX)) + 'px';
+    panel.style.top = Math.max(0, Math.min(newY, maxY)) + 'px';
+}
+
+function onDragEnd() {
+    isSearchPanelDragging = false;
+    document.removeEventListener('mousemove', onDragMove);
+    document.removeEventListener('mouseup', onDragEnd);
+}
+
+async function goToSearchResult(index) {
+    if (index < 0 || index >= searchResults.length) return;
+    
+    currentSearchIndex = index;
+    const result = searchResults[index];
+    
+    const pageIndex = currentPages.findIndex(p => p.id === result.page_id);
+    if (pageIndex === -1) {
+        const pageData = getPageDataByNumber(result.page_number);
+        if (pageData) {
+            const idx = currentPages.findIndex(p => p.id === pageData.id);
+            if (idx !== -1) {
+                await loadPage(idx);
+            }
+        }
+    } else {
+        await loadPage(pageIndex);
+    }
+    
+    setTimeout(() => {
+        highlightSearchResult(result);
+    }, 100);
+    
+    $$('.search-result-item').forEach((item, i) => {
+        item.classList.toggle('active', i === index);
+    });
+    
+    const activeItem = document.querySelector(`.search-result-item[data-index="${index}"]`);
+    if (activeItem) {
+        activeItem.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+}
+
+function highlightSearchResult(result) {
+    clearSearchHighlights();
+    
+    const page = currentPageData;
+    if (!page) return;
+    
+    let jpgWidth = page.jpg_width;
+    let jpgHeight = page.jpg_height;
+    if (!jpgWidth || !jpgHeight) {
+        jpgWidth = page.width * 200 / 72;
+        jpgHeight = page.height * 200 / 72;
+    }
+    
+    const canvas = $('#pdf-canvas');
+    const canvasRect = canvas.getBoundingClientRect();
+    const container = $('#pdf-container');
+    const containerRect = container.getBoundingClientRect();
+    
+    const displayWidth = canvasRect.width;
+    const displayHeight = canvasRect.height;
+    const offsetX = canvasRect.left - containerRect.left;
+    const offsetY = canvasRect.top - containerRect.top;
+    
+    const scaleX = displayWidth / jpgWidth;
+    const scaleY = displayHeight / jpgHeight;
+    
+    const x = result.bbox_x0 * scaleX + offsetX;
+    const y = result.bbox_y0 * scaleY + offsetY;
+    const w = (result.bbox_x1 - result.bbox_x0) * scaleX;
+    const h = (result.bbox_y1 - result.bbox_y0) * scaleY;
+    
+    const highlight = document.createElement('div');
+    highlight.className = 'search-highlight';
+    highlight.id = 'search-highlight-box';
+    highlight.style.left = x + 'px';
+    highlight.style.top = y + 'px';
+    highlight.style.width = w + 'px';
+    highlight.style.height = h + 'px';
+    
+    container.appendChild(highlight);
+    
+    highlightElement(result.id);
+    
+    container.scrollTo({
+        top: Math.max(0, y - 50),
+        behavior: 'smooth'
+    });
+}
+
+function clearSearchHighlights() {
+    const highlight = document.getElementById('search-highlight-box');
+    if (highlight) {
+        highlight.remove();
     }
 }

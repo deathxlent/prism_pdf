@@ -791,15 +791,20 @@ def _merge_cross_page_tables(pages: list[dict]) -> list[dict]:
     return pages
 
 
-@router.get("/documents/{doc_id}/export/html")
-async def export_document_html(doc_id: int):
-    result = await get_parse_results(doc_id)
-    if "error" in result:
-        raise HTTPException(status_code=404, detail=result["error"])
+@router.get("/documents/{doc_id}/search")
+async def search_document(doc_id: int, q: str):
+    document = await db.get_document(doc_id)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
 
-    pages = result["pages"]
-    doc = result["document"]
+    if not q or not q.strip():
+        return {"results": [], "total": 0}
 
+    results = await db.search_elements(doc_id, q.strip())
+    return {"results": results, "total": len(results)}
+
+
+def _generate_document_html(pages: list, doc: dict) -> str:
     pages = _merge_cross_page_tables(pages)
 
     first_elem_per_group = {}
@@ -809,81 +814,38 @@ async def export_document_html(doc_id: int):
             if cpg is not None and elem["element_type"] == "Table" and cpg not in first_elem_per_group:
                 first_elem_per_group[cpg] = elem["id"]
 
-    html_parts = [
-        "<!DOCTYPE html>",
-        "<html lang='zh-CN'>",
-        "<head>",
-        "<meta charset='UTF-8'>",
-        f"<title>{doc['original_filename']} - 解析结果</title>",
-        "<style>",
-        "body { font-family: 'Microsoft YaHei', Arial, sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; line-height: 1.6; }",
-        "h1 { color: #333; border-bottom: 3px solid #007bff; padding-bottom: 10px; margin-top: 40px; page-break-before: always; }",
-        "h1:first-child { page-break-before: auto; }",
-        "h2 { color: #555; margin-top: 20px; }",
-        "h3 { color: #666; }",
-        "table { border-collapse: collapse; width: 100%; margin: 10px 0; }",
-        "table, th, td { border: 1px solid #ddd; }",
-        "th, td { padding: 8px 12px; text-align: left; }",
-        "th { background-color: #f5f5f5; }",
-        "img { max-width: 100%; height: auto; margin: 10px 0; }",
-        "code { background-color: #f5f5f5; padding: 2px 6px; border-radius: 4px; font-family: Consolas, monospace; }",
-        ".page-header, .page-footer { color: #888; font-size: 0.9em; font-style: italic; }",
-        ".formula { text-align: center; font-size: 1.1em; margin: 15px 0; }",
-        ".caption { font-style: italic; color: #666; text-align: center; }",
-        "</style>",
-        "</head>",
-        "<body>",
-    ]
-
+    body_parts = []
     for page in pages:
         page_num = page["page_number"]
-        html_parts.append(f"<h1>第 {page_num} 页</h1>")
+        body_parts.append(f"<h1>第 {page_num} 页</h1>")
 
         elements = sorted(page["elements"], key=lambda e: e["reading_order"])
         skip_groups = page.get("_skip_groups", set())
 
         for elem in elements:
-            etype = elem["element_type"]
-            content = elem.get("content", "") or ""
-            content_format = elem.get("content_format", "") or ""
             cpg = elem.get("cross_page_group")
-
-            if etype == "Table" and cpg in skip_groups and cpg is not None:
+            if elem["element_type"] == "Table" and cpg in skip_groups and cpg is not None:
                 if first_elem_per_group.get(cpg) != elem["id"]:
                     continue
+            html = _element_to_html(elem)
+            if html:
+                body_parts.append(html)
 
-            if etype == "Title":
-                html_parts.append(f"<h1 style='color: #dc143c;'>{content}</h1>")
-            elif etype == "Section-header":
-                html_parts.append(f"<h2>{content}</h2>")
-            elif etype == "Page-header":
-                html_parts.append(f"<div class='page-header'>{content}</div>")
-            elif etype == "Page-footer":
-                html_parts.append(f"<div class='page-footer'>{content}</div>")
-            elif etype == "Formula":
-                html_parts.append(f"<div class='formula'>{content}</div>")
-            elif etype == "Table":
-                if content_format == "html":
-                    html_parts.append(content)
-                else:
-                    html_parts.append(f"<pre>{content}</pre>")
-            elif etype == "Picture":
-                if content:
-                    html_parts.append(f'<img src="file://{content}" alt="Picture">')
-            elif etype == "Caption":
-                html_parts.append(f"<div class='caption'>{content}</div>")
-            elif etype == "List-item":
-                html_parts.append(f"<li>{content}</li>")
-            elif etype in TEXT_TYPES:
-                if content.strip():
-                    html_parts.append(f"<p>{content}</p>")
-            else:
-                if content.strip():
-                    html_parts.append(f"<p>{content}</p>")
+    body_html = "\n".join(body_parts)
+    title = f"{doc['original_filename']} - 解析结果"
+    return _build_html_document(title, body_html)
 
-    html_parts.append("</body></html>")
 
-    html_content = "\n".join(html_parts)
+@router.get("/documents/{doc_id}/export/html")
+async def export_document_html(doc_id: int):
+    result = await get_parse_results(doc_id)
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+
+    pages = result["pages"]
+    doc = result["document"]
+
+    html_content = _generate_document_html(pages, doc)
     filename = f"{Path(doc['original_filename']).stem}_解析结果.html"
 
     return Response(
@@ -904,72 +866,7 @@ async def export_page_html(page_id: int):
         raise HTTPException(status_code=404, detail="Document not found")
 
     elements = await db.get_elements(page_id)
-
-    html_parts = [
-        "<!DOCTYPE html>",
-        "<html lang='zh-CN'>",
-        "<head>",
-        "<meta charset='UTF-8'>",
-        f"<title>{doc['original_filename']} - 第 {page['page_number']} 页</title>",
-        "<style>",
-        "body { font-family: 'Microsoft YaHei', Arial, sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; line-height: 1.6; }",
-        "h1 { color: #333; border-bottom: 3px solid #007bff; padding-bottom: 10px; }",
-        "h2 { color: #555; margin-top: 20px; }",
-        "h3 { color: #666; }",
-        "table { border-collapse: collapse; width: 100%; margin: 10px 0; }",
-        "table, th, td { border: 1px solid #ddd; }",
-        "th, td { padding: 8px 12px; text-align: left; }",
-        "th { background-color: #f5f5f5; }",
-        "img { max-width: 100%; height: auto; margin: 10px 0; }",
-        "code { background-color: #f5f5f5; padding: 2px 6px; border-radius: 4px; font-family: Consolas, monospace; }",
-        ".page-header, .page-footer { color: #888; font-size: 0.9em; font-style: italic; }",
-        ".formula { text-align: center; font-size: 1.1em; margin: 15px 0; }",
-        ".caption { font-style: italic; color: #666; text-align: center; }",
-        "</style>",
-        "</head>",
-        "<body>",
-        f"<h1>第 {page['page_number']} 页</h1>",
-    ]
-
-    sorted_elements = sorted(elements, key=lambda e: e["reading_order"])
-
-    for elem in sorted_elements:
-        etype = elem["element_type"]
-        content = elem.get("content", "") or ""
-        content_format = elem.get("content_format", "") or ""
-
-        if etype == "Title":
-            html_parts.append(f"<h1 style='color: #dc143c;'>{content}</h1>")
-        elif etype == "Section-header":
-            html_parts.append(f"<h2>{content}</h2>")
-        elif etype == "Page-header":
-            html_parts.append(f"<div class='page-header'>{content}</div>")
-        elif etype == "Page-footer":
-            html_parts.append(f"<div class='page-footer'>{content}</div>")
-        elif etype == "Formula":
-            html_parts.append(f"<div class='formula'>{content}</div>")
-        elif etype == "Table":
-            if content_format == "html":
-                html_parts.append(content)
-            else:
-                html_parts.append(f"<pre>{content}</pre>")
-        elif etype == "Picture":
-            if content:
-                html_parts.append(f'<img src="file://{content}" alt="Picture">')
-        elif etype == "Caption":
-            html_parts.append(f"<div class='caption'>{content}</div>")
-        elif etype == "List-item":
-            html_parts.append(f"<li>{content}</li>")
-        elif etype in TEXT_TYPES:
-            if content.strip():
-                html_parts.append(f"<p>{content}</p>")
-        else:
-            if content.strip():
-                html_parts.append(f"<p>{content}</p>")
-
-    html_parts.append("</body></html>")
-
-    html_content = "\n".join(html_parts)
+    html_content = _generate_page_html(page, doc, elements)
     filename = f"{Path(doc['original_filename']).stem}_第{page['page_number']}页.html"
 
     return Response(
@@ -979,71 +876,88 @@ async def export_page_html(page_id: int):
     )
 
 
-def _generate_page_html(page: dict, doc: dict, elements: list) -> str:
-    html_parts = [
+def _get_html_style() -> str:
+    return """
+body { font-family: 'Microsoft YaHei', Arial, sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; line-height: 1.6; }
+h1 { color: #333; border-bottom: 3px solid #007bff; padding-bottom: 10px; margin-top: 40px; page-break-before: always; }
+h1:first-child { page-break-before: auto; }
+h2 { color: #555; margin-top: 20px; }
+h3 { color: #666; }
+table { border-collapse: collapse; width: 100%; margin: 10px 0; }
+table, th, td { border: 1px solid #ddd; }
+th, td { padding: 8px 12px; text-align: left; }
+th { background-color: #f5f5f5; }
+img { max-width: 100%; height: auto; margin: 10px 0; }
+code { background-color: #f5f5f5; padding: 2px 6px; border-radius: 4px; font-family: Consolas, monospace; }
+.page-header, .page-footer { color: #888; font-size: 0.9em; font-style: italic; }
+.formula { text-align: center; font-size: 1.1em; margin: 15px 0; }
+.caption { font-style: italic; color: #666; text-align: center; }
+"""
+
+
+def _element_to_html(elem: dict) -> str:
+    etype = elem["element_type"]
+    content = elem.get("content", "") or ""
+    content_format = elem.get("content_format", "") or ""
+
+    if etype == "Title":
+        return f"<h1 style='color: #dc143c;'>{content}</h1>"
+    elif etype == "Section-header":
+        return f"<h2>{content}</h2>"
+    elif etype == "Page-header":
+        return f"<div class='page-header'>{content}</div>"
+    elif etype == "Page-footer":
+        return f"<div class='page-footer'>{content}</div>"
+    elif etype == "Formula":
+        return f"<div class='formula'>{content}</div>"
+    elif etype == "Table":
+        if content_format == "html":
+            return content
+        else:
+            return f"<pre>{content}</pre>"
+    elif etype == "Picture":
+        if content:
+            return f'<img src="file://{content}" alt="Picture">'
+    elif etype == "Caption":
+        return f"<div class='caption'>{content}</div>"
+    elif etype == "List-item":
+        return f"<li>{content}</li>"
+    elif etype in TEXT_TYPES:
+        if content.strip():
+            return f"<p>{content}</p>"
+    else:
+        if content.strip():
+            return f"<p>{content}</p>"
+    return ""
+
+
+def _build_html_document(title: str, body_html: str) -> str:
+    return "\n".join([
         "<!DOCTYPE html>",
         "<html lang='zh-CN'>",
         "<head>",
         "<meta charset='UTF-8'>",
-        f"<title>{doc['original_filename']} - 第 {page['page_number']} 页</title>",
+        f"<title>{title}</title>",
         "<style>",
-        "body { font-family: 'Microsoft YaHei', Arial, sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; line-height: 1.6; }",
-        "h1 { color: #333; border-bottom: 3px solid #007bff; padding-bottom: 10px; }",
-        "h2 { color: #555; margin-top: 20px; }",
-        "h3 { color: #666; }",
-        "table { border-collapse: collapse; width: 100%; margin: 10px 0; }",
-        "table, th, td { border: 1px solid #ddd; }",
-        "th, td { padding: 8px 12px; text-align: left; }",
-        "th { background-color: #f5f5f5; }",
-        "img { max-width: 100%; height: auto; margin: 10px 0; }",
-        "code { background-color: #f5f5f5; padding: 2px 6px; border-radius: 4px; font-family: Consolas, monospace; }",
-        ".page-header, .page-footer { color: #888; font-size: 0.9em; font-style: italic; }",
-        ".formula { text-align: center; font-size: 1.1em; margin: 15px 0; }",
-        ".caption { font-style: italic; color: #666; text-align: center; }",
+        _get_html_style(),
         "</style>",
         "</head>",
         "<body>",
-        f"<h1>第 {page['page_number']} 页</h1>",
-    ]
+        body_html,
+        "</body></html>",
+    ])
 
+
+def _generate_page_html(page: dict, doc: dict, elements: list) -> str:
     sorted_elements = sorted(elements, key=lambda e: e["reading_order"])
-
+    body_parts = [f"<h1>第 {page['page_number']} 页</h1>"]
     for elem in sorted_elements:
-        etype = elem["element_type"]
-        content = elem.get("content", "") or ""
-        content_format = elem.get("content_format", "") or ""
-
-        if etype == "Title":
-            html_parts.append(f"<h1 style='color: #dc143c;'>{content}</h1>")
-        elif etype == "Section-header":
-            html_parts.append(f"<h2>{content}</h2>")
-        elif etype == "Page-header":
-            html_parts.append(f"<div class='page-header'>{content}</div>")
-        elif etype == "Page-footer":
-            html_parts.append(f"<div class='page-footer'>{content}</div>")
-        elif etype == "Formula":
-            html_parts.append(f"<div class='formula'>{content}</div>")
-        elif etype == "Table":
-            if content_format == "html":
-                html_parts.append(content)
-            else:
-                html_parts.append(f"<pre>{content}</pre>")
-        elif etype == "Picture":
-            if content:
-                html_parts.append(f'<img src="file://{content}" alt="Picture">')
-        elif etype == "Caption":
-            html_parts.append(f"<div class='caption'>{content}</div>")
-        elif etype == "List-item":
-            html_parts.append(f"<li>{content}</li>")
-        elif etype in TEXT_TYPES:
-            if content.strip():
-                html_parts.append(f"<p>{content}</p>")
-        else:
-            if content.strip():
-                html_parts.append(f"<p>{content}</p>")
-
-    html_parts.append("</body></html>")
-    return "\n".join(html_parts)
+        html = _element_to_html(elem)
+        if html:
+            body_parts.append(html)
+    body_html = "\n".join(body_parts)
+    title = f"{doc['original_filename']} - 第 {page['page_number']} 页"
+    return _build_html_document(title, body_html)
 
 
 @router.get("/documents/{doc_id}/export/html-zip")
