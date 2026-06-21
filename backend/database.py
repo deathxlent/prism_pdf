@@ -126,6 +126,16 @@ async def init_db():
         except aiosqlite.OperationalError:
             pass
 
+        try:
+            await db.execute("ALTER TABLE page_elements ADD COLUMN image_description TEXT")
+        except aiosqlite.OperationalError:
+            pass
+
+        try:
+            await db.execute("ALTER TABLE page_elements ADD COLUMN translated_content TEXT")
+        except aiosqlite.OperationalError:
+            pass
+
         # Create FTS5 virtual table for full-text search
         try:
             await db.execute(FTS5_CREATE_NGRAM)

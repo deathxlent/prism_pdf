@@ -22,6 +22,8 @@ let selectionOverlay = null;
 let selectedBbox = null;
 let pendingNewElement = null;
 let reorderingPages = new Set();
+let activeLlmConfig = null;
+let languageSelectCallback = null;
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
@@ -236,11 +238,15 @@ function showUploadResult(msg, isError) {
 
 async function loadDocuments() {
     try {
-        const res = await fetch(API + '/api/documents');
-        const data = await res.json();
+        const [docsRes, llmRes] = await Promise.all([
+            fetch(API + '/api/documents').then(r => r.json()),
+            fetch(API + '/api/llm-config/active').then(r => r.json()).catch(() => null)
+        ]);
+
+        activeLlmConfig = llmRes && llmRes.active_config ? llmRes.active_config : null;
         
         const docsWithStatus = await Promise.all(
-            data.documents.map(async doc => {
+            docsRes.documents.map(async doc => {
                 try {
                     const statusRes = await fetch(API + '/api/status/' + doc.id);
                     const statusData = await statusRes.json();
@@ -331,6 +337,10 @@ function renderDocumentsList(docs) {
                             ${doc.status === 'completed' ? 
                                 `<button class="btn btn-warning btn-sm" onclick="event.stopPropagation(); reparseDocumentFromList(${doc.id})">
                                     <i class="fas fa-sync-alt"></i> 重解析
+                                </button>` : ''}
+                            ${doc.status === 'completed' && activeLlmConfig ? 
+                                `<button class="btn btn-info btn-sm" onclick="event.stopPropagation(); showDocTranslateLanguageSelect(${doc.id})">
+                                    <i class="fas fa-language"></i> 翻译
                                 </button>` : ''}
                             <button class="btn btn-success btn-sm" onclick="event.stopPropagation(); viewDocument(${doc.id})">
                                 <i class="fas fa-eye"></i> 查看
@@ -437,14 +447,18 @@ async function loadDocumentDetail(docId) {
     }
 
     try {
-        const [docRes, pagesRes, resultsRes] = await Promise.all([
+        const [docRes, pagesRes, resultsRes, llmRes] = await Promise.all([
             fetch(API + '/api/documents').then(r => r.json()),
             fetch(API + '/api/status/' + docId).then(r => r.json()),
-            fetch(API + '/api/results/' + docId).then(r => r.json()).catch(() => null)
+            fetch(API + '/api/results/' + docId).then(r => r.json()).catch(() => null),
+            fetch(API + '/api/llm-config/active').then(r => r.json()).catch(() => null)
         ]);
 
         currentDocument = docRes.documents.find(d => d.id === docId);
         currentPages = pagesRes.pages;
+
+        activeLlmConfig = llmRes && llmRes.active_config ? llmRes.active_config : null;
+        updateLlmButtons();
 
         if (!currentDocument) {
             alert('文档不存在');
@@ -725,10 +739,13 @@ function renderElements() {
     }
 
     const sorted = [...currentElements].sort((a, b) => a.reading_order - b.reading_order);
+    const hasLlm = !!activeLlmConfig;
+    const hasVision = hasLlm && activeLlmConfig.supports_vision;
 
     container.innerHTML = sorted.map((elem, idx) => {
         const type = elem.element_type.toLowerCase();
         const isImage = elem.content_format === 'image_path';
+        const isPicture = elem.element_type === 'Picture';
         let contentHtml = '';
 
         if (isImage && elem.content) {
@@ -739,6 +756,28 @@ function renderElements() {
             contentHtml = `<code>${escapeHtml(elem.content || '(空)')}</code>`;
         } else {
             contentHtml = renderMarkdownSimple(elem.content || '(空)');
+        }
+
+        let descHtml = '';
+        if (isPicture && elem.image_description) {
+            descHtml = `<div class="element-image-desc"><i class="fas fa-image"></i> ${escapeHtml(elem.image_description)}</div>`;
+        }
+
+        let translatedHtml = '';
+        if (elem.translated_content) {
+            translatedHtml = `<div class="element-translated"><i class="fas fa-language"></i> ${escapeHtml(elem.translated_content)}</div>`;
+        }
+
+        let extraBtns = '';
+        if (isPicture && hasVision) {
+            extraBtns += `<button class="btn btn-info btn-sm describe-btn" onclick="event.stopPropagation(); describeImage(${elem.id})" title="AI生成图片描述">
+                <i class="fas fa-magic"></i> 描述
+            </button>`;
+        }
+        if (hasLlm && (isPicture ? !!elem.image_description : !!(elem.content || '').trim())) {
+            extraBtns += `<button class="btn btn-info btn-sm translate-btn" onclick="event.stopPropagation(); showElementTranslateLanguageSelect(${elem.id})" title="翻译此解析项">
+                <i class="fas fa-language"></i> 翻译
+            </button>`;
         }
 
         return `
@@ -762,10 +801,13 @@ function renderElements() {
                 <div class="element-content markdown" onclick="highlightElement(${elem.id})">
                     ${contentHtml}
                 </div>
+                ${descHtml}
+                ${translatedHtml}
                 <div class="element-footer">
                     <button class="btn btn-outline btn-sm edit-btn" onclick="event.stopPropagation(); openEditModal(${elem.id})">
                         <i class="fas fa-edit"></i> 编辑
                     </button>
+                    ${extraBtns}
                     <button class="btn btn-outline btn-sm delete-btn" onclick="event.stopPropagation(); deleteElement(${elem.id})">
                         <i class="fas fa-trash"></i> 删除
                     </button>
@@ -2128,5 +2170,214 @@ function clearSearchHighlights() {
     const highlight = document.getElementById('search-highlight-box');
     if (highlight) {
         highlight.remove();
+    }
+}
+
+function updateLlmButtons() {
+    const translateBtn = $('#translate-page-btn');
+    if (translateBtn) {
+        if (activeLlmConfig) {
+            translateBtn.classList.remove('hidden');
+        } else {
+            translateBtn.classList.add('hidden');
+        }
+    }
+}
+
+async function loadLlmConfig() {
+    try {
+        const res = await fetch(API + '/api/llm-config/active');
+        const data = await res.json();
+        activeLlmConfig = data && data.active_config ? data.active_config : null;
+    } catch (e) {
+        activeLlmConfig = null;
+    }
+    updateLlmButtons();
+}
+
+async function describeImage(elementId) {
+    if (!activeLlmConfig) {
+        alert('请先配置并激活一个 LLM');
+        return;
+    }
+    if (!activeLlmConfig.supports_vision) {
+        alert('当前激活的 LLM 不支持图生文 (Vision) 功能，请配置支持 Vision 的模型');
+        return;
+    }
+
+    const card = document.querySelector(`.element-card[data-element-id="${elementId}"]`);
+    const btn = card ? card.querySelector('.describe-btn') : null;
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 生成中...';
+    }
+
+    try {
+        const res = await fetch(`${API}/api/elements/${elementId}/describe-image`, { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || '生成描述失败');
+
+        const idx = currentElements.findIndex(e => e.id === elementId);
+        if (idx !== -1) {
+            currentElements[idx].image_description = data.image_description;
+        }
+        renderElements();
+    } catch (e) {
+        alert('生成图片描述失败: ' + e.message);
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-magic"></i> 描述';
+        }
+    }
+}
+
+function showLanguageSelectPopup(callback) {
+    languageSelectCallback = callback;
+    const popup = $('#language-select-popup');
+    popup.classList.remove('hidden');
+}
+
+function hideLanguageSelectPopup() {
+    const popup = $('#language-select-popup');
+    popup.classList.add('hidden');
+    languageSelectCallback = null;
+}
+
+function confirmLanguageSelect(lang) {
+    if (languageSelectCallback) {
+        languageSelectCallback(lang);
+    }
+    hideLanguageSelectPopup();
+}
+
+function cancelLanguageSelect() {
+    hideLanguageSelectPopup();
+}
+
+function showElementTranslateLanguageSelect(elementId) {
+    if (!activeLlmConfig) {
+        alert('请先配置并激活一个 LLM');
+        return;
+    }
+    showLanguageSelectPopup((lang) => translateElement(elementId, lang));
+}
+
+function showTranslatePageLanguageSelect() {
+    if (!activeLlmConfig) {
+        alert('请先配置并激活一个 LLM');
+        return;
+    }
+    if (!currentPageData) {
+        alert('请先选择一个页面');
+        return;
+    }
+    showLanguageSelectPopup((lang) => translateCurrentPage(lang));
+}
+
+function showDocTranslateLanguageSelect(docId) {
+    if (!activeLlmConfig) {
+        alert('请先配置并激活一个 LLM');
+        return;
+    }
+    showLanguageSelectPopup((lang) => translateDocument(docId, lang));
+}
+
+async function translateElement(elementId, targetLanguage) {
+    const card = document.querySelector(`.element-card[data-element-id="${elementId}"]`);
+    const btn = card ? card.querySelector('.translate-btn') : null;
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 翻译中...';
+    }
+
+    try {
+        const res = await fetch(`${API}/api/elements/${elementId}/translate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ target_language: targetLanguage })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || '翻译失败');
+
+        const idx = currentElements.findIndex(e => e.id === elementId);
+        if (idx !== -1) {
+            currentElements[idx].translated_content = data.translated_content;
+        }
+        renderElements();
+    } catch (e) {
+        alert('翻译失败: ' + e.message);
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-language"></i> 翻译';
+        }
+    }
+}
+
+async function translateCurrentPage(targetLanguage) {
+    if (!currentPageData) return;
+
+    const btn = $('#translate-page-btn');
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 翻译中...';
+    }
+
+    try {
+        const res = await fetch(`${API}/api/pages/${currentPageData.id}/translate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ target_language: targetLanguage })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || '翻译失败');
+
+        await loadPage(currentPageIndex);
+        alert(`翻译完成，共翻译 ${data.translated_count} 项`);
+    } catch (e) {
+        alert('页面翻译失败: ' + e.message);
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-language"></i> 翻译当前页';
+        }
+    }
+}
+
+async function translateDocument(docId, targetLanguage) {
+    if (!confirm('确定要翻译整个文档吗？这可能需要较长时间。')) return;
+
+    const langNames = { en: '英语', zh: '中文', ja: '日语' };
+    const langDisplay = langNames[targetLanguage] || targetLanguage;
+
+    const overlay = document.createElement('div');
+    overlay.className = 'translate-overlay';
+    overlay.id = 'translate-overlay';
+    overlay.innerHTML = `
+        <div class="translate-progress-card">
+            <div class="translate-progress-icon"><i class="fas fa-language fa-spin"></i></div>
+            <div class="translate-progress-text">正在翻译文档为${langDisplay}...</div>
+            <div class="translate-progress-sub">请勿关闭页面</div>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+
+    try {
+        const res = await fetch(`${API}/api/documents/${docId}/translate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ target_language: targetLanguage })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || '翻译失败');
+
+        if (currentDocId === docId) {
+            await loadPage(currentPageIndex);
+        }
+        alert(`文档翻译完成，共翻译 ${data.total_translated} 项`);
+    } catch (e) {
+        alert('文档翻译失败: ' + e.message);
+    } finally {
+        const ov = document.getElementById('translate-overlay');
+        if (ov) ov.remove();
     }
 }

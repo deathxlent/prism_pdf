@@ -94,6 +94,9 @@
                     <button class="btn btn-outline" onclick="exportDocumentHtmlZip()" id="export-html-zip-btn">
                         <i class="fas fa-file-archive"></i> 导出HTML ZIP
                     </button>
+                    <button class="btn btn-info hidden" onclick="showTranslatePageLanguageSelect()" id="translate-page-btn">
+                        <i class="fas fa-language"></i> 翻译当前页
+                    </button>
                     <button class="btn btn-primary" onclick="reparseDocument()">
                         <i class="fas fa-sync-alt"></i> 重解析
                     </button>
@@ -425,7 +428,28 @@
         </div>
     </div>
 
+    <div id="language-select-popup" class="language-select-popup hidden">
+        <div class="language-select-content">
+            <div class="language-select-title">选择目标语言</div>
+            <div class="language-options">
+                <button class="language-option" data-lang="en" onclick="confirmLanguageSelect('en')">
+                    <span class="lang-code">EN</span>
+                    <span class="lang-name">English</span>
+                </button>
+                <button class="language-option" data-lang="zh" onclick="confirmLanguageSelect('zh')">
+                    <span class="lang-code">中</span>
+                    <span class="lang-name">中文</span>
+                </button>
+                <button class="language-option" data-lang="ja" onclick="confirmLanguageSelect('ja')">
+                    <span class="lang-code">日</span>
+                    <span class="lang-name">日本語</span>
+                </button>
+            </div>
+            <button class="language-select-cancel" onclick="cancelLanguageSelect()">取消</button>
+        </div>
+    </div>
+
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-    <script src="/static/app.js?v=2026061801"></script>
+    <script src="/static/app.js?v=2026062101"></script>
 </body>
 </html>

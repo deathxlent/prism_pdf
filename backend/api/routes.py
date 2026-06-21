@@ -274,6 +274,10 @@ async def update_element(element_id: int, data: dict):
             updates["reading_order"] = data["reading_order"]
         if "element_type" in data:
             updates["element_type"] = data["element_type"]
+        if "image_description" in data:
+            updates["image_description"] = data["image_description"]
+        if "translated_content" in data:
+            updates["translated_content"] = data["translated_content"]
 
         if updates:
             sets = ", ".join(f"{k} = ?" for k in updates)
@@ -1126,6 +1130,128 @@ async def delete_llm_config(type_key: str, config_id: str):
         return {"message": "Config deleted"}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/elements/{element_id}/describe-image")
+async def describe_image_element(element_id: int):
+    from backend.services.llm_service import describe_image
+
+    element = await db.get_element(element_id)
+    if not element:
+        raise HTTPException(status_code=404, detail="Element not found")
+
+    if element["element_type"] != "Picture":
+        raise HTTPException(status_code=400, detail="Only Picture elements can be described")
+
+    image_path = element.get("content", "") or ""
+    if not image_path or not Path(image_path).exists():
+        raise HTTPException(status_code=400, detail="图片文件不存在")
+
+    try:
+        description = describe_image(image_path)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"生成描述失败: {str(e)}")
+
+    await db.update_element(element_id, image_description=description)
+
+    return {"element_id": element_id, "image_description": description}
+
+
+@router.post("/elements/{element_id}/translate")
+async def translate_element(element_id: int, data: dict):
+    from backend.services.llm_service import translate_text
+
+    element = await db.get_element(element_id)
+    if not element:
+        raise HTTPException(status_code=404, detail="Element not found")
+
+    target_language = data.get("target_language", "en")
+    etype = element.get("element_type", "")
+    content = element.get("content", "") or ""
+    image_desc = element.get("image_description", "") or ""
+
+    text_to_translate = ""
+    if etype == "Picture":
+        if image_desc:
+            text_to_translate = image_desc
+        else:
+            raise HTTPException(status_code=400, detail="图片元素无描述，请先生成图片描述")
+    else:
+        if not content.strip():
+            raise HTTPException(status_code=400, detail="元素内容为空，无法翻译")
+        text_to_translate = content
+
+    try:
+        translated = translate_text(text_to_translate, target_language)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"翻译失败: {str(e)}")
+
+    await db.update_element(element_id, translated_content=translated)
+
+    return {"element_id": element_id, "translated_content": translated}
+
+
+@router.post("/pages/{page_id}/translate")
+async def translate_page(page_id: int, data: dict):
+    from backend.services.llm_service import translate_page_content
+
+    page = await db.get_page(page_id)
+    if not page:
+        raise HTTPException(status_code=404, detail="Page not found")
+
+    target_language = data.get("target_language", "en")
+    elements = await db.get_elements(page_id)
+
+    if not elements:
+        raise HTTPException(status_code=400, detail="当前页面无解析元素")
+
+    try:
+        results = translate_page_content(elements, target_language)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"翻译失败: {str(e)}")
+
+    for item in results:
+        await db.update_element(item["element_id"], translated_content=item["translated_content"])
+
+    return {"page_id": page_id, "translated_count": len(results), "results": results}
+
+
+@router.post("/documents/{doc_id}/translate")
+async def translate_document(doc_id: int, data: dict):
+    from backend.services.llm_service import translate_page_content
+
+    document = await db.get_document(doc_id)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    target_language = data.get("target_language", "en")
+    pages = await db.get_pages(doc_id)
+
+    total_translated = 0
+    page_results = []
+
+    for page in pages:
+        elements = await db.get_elements(page["id"])
+        if not elements:
+            continue
+
+        try:
+            results = translate_page_content(elements, target_language)
+            for item in results:
+                await db.update_element(item["element_id"], translated_content=item["translated_content"])
+            total_translated += len(results)
+            page_results.append({"page_id": page["id"], "page_number": page["page_number"], "translated_count": len(results)})
+        except Exception as e:
+            logger.error(f"Failed to translate page {page['page_number']}: {e}")
+            page_results.append({"page_id": page["id"], "page_number": page["page_number"], "error": str(e)})
+
+    return {"document_id": doc_id, "total_translated": total_translated, "pages": page_results}
 
 
 
