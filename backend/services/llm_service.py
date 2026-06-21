@@ -285,6 +285,11 @@ def _call_llm_vision(text_prompt: str, image_path: str, max_tokens: int = 1024) 
     raise ValueError(f"Vision LLM 返回异常格式: {list(result.keys())}")
 
 
+def is_vision_available() -> bool:
+    cfg = _get_active_llm()
+    return bool(cfg and cfg.get("supports_vision"))
+
+
 def describe_image(image_path: str) -> str:
     if not Path(image_path).exists():
         raise FileNotFoundError(f"图片文件不存在: {image_path}")
@@ -301,6 +306,16 @@ def describe_image(image_path: str) -> str:
         "- 最终答案要完整清晰"
     )
     return _call_llm_vision(prompt, image_path, max_tokens=2048)
+
+
+def describe_image_silent(image_path: str) -> str | None:
+    try:
+        if not Path(image_path).exists():
+            return None
+        return describe_image(image_path)
+    except Exception as e:
+        logger.info(f"自动生成图片描述失败（静默跳过）: {type(e).__name__}: {e}")
+        return None
 
 
 def translate_text(text: str, target_language: str) -> str:

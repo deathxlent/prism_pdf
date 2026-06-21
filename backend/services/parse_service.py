@@ -835,6 +835,17 @@ async def _parse_page(doc_id: int, page_info: dict, doc_dir: str,
                                                   cross_page_group=elem_cross_page_group)
                     saved_element_ids.append(eid)
 
+                    if eid and elem_type in ("Picture", "Figure") and content and Path(content).exists():
+                        try:
+                            from backend.services.llm_service import is_vision_available, describe_image_silent
+                            if is_vision_available():
+                                desc = await asyncio.to_thread(describe_image_silent, content)
+                                if desc:
+                                    await db.update_element(eid, image_description=desc)
+                                    logger.info(f"Page {page_info['page_number']}: auto-described {elem_type} element {eid}")
+                        except Exception as _desc_e:
+                            logger.debug(f"Auto-describe skipped for element {eid}: {_desc_e}")
+
                     # 追溯更新前一页表格的 cross_page_group
                     if need_retroactive_update and eid and prev_page_table_info and prev_page_table_info.get("element_id"):
                         await db.update_element_cross_page_group(
@@ -1212,6 +1223,19 @@ async def _parse_page(doc_id: int, page_info: dict, doc_dir: str,
                     prev_page_table_info["element_id"], result["cross_page_group"]
                 )
                 prev_page_table_info["cross_page_group"] = result["cross_page_group"]
+
+            if element_id and result["elem_type"] in ("Picture", "Figure"):
+                pic_content = result.get("content", "") or ""
+                if pic_content and Path(pic_content).exists():
+                    try:
+                        from backend.services.llm_service import is_vision_available, describe_image_silent
+                        if is_vision_available():
+                            desc = await asyncio.to_thread(describe_image_silent, pic_content)
+                            if desc:
+                                await db.update_element(element_id, image_description=desc)
+                                logger.info(f"Page {page_info['page_number']}: auto-described {result['elem_type']} element {element_id}")
+                    except Exception as _desc_e:
+                        logger.debug(f"Auto-describe skipped for element {element_id}: {_desc_e}")
 
     pdf_doc.close()
     await db.update_page(page_id, status="completed", is_ordered=1 if is_ordered else 0)

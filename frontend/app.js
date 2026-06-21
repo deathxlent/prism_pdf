@@ -885,6 +885,17 @@ function openEditModal(elementId) {
     editingElementId = elementId;
     $('#edit-type').value = elem.element_type;
     $('#edit-content').value = elem.content || '';
+
+    const transGroup = $('#edit-translated-group');
+    const transField = $('#edit-translated');
+    if (elem.translated_content) {
+        transField.value = elem.translated_content;
+        transGroup.style.display = '';
+    } else {
+        transField.value = '';
+        transGroup.style.display = 'none';
+    }
+
     $('#edit-modal').classList.remove('hidden');
 }
 
@@ -898,15 +909,21 @@ async function saveElementEdit() {
 
     const newType = $('#edit-type').value;
     const newContent = $('#edit-content').value;
+    const newTranslated = $('#edit-translated').value;
+
+    const body = {
+        element_type: newType,
+        content: newContent
+    };
+    if (newTranslated !== undefined) {
+        body.translated_content = newTranslated;
+    }
 
     try {
         const res = await fetch(API + '/api/elements/' + editingElementId, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                element_type: newType,
-                content: newContent
-            })
+            body: JSON.stringify(body)
         });
 
         if (!res.ok) throw new Error('Failed to update element');
