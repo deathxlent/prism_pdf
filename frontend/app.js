@@ -1,6 +1,24 @@
 const API = '';
 pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
+const LLM_FETCH_TIMEOUT_MS = 60 * 60 * 1000;
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = 30000) {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        const res = await fetch(url, { ...options, signal: controller.signal });
+        clearTimeout(id);
+        return res;
+    } catch (e) {
+        clearTimeout(id);
+        if (e.name === 'AbortError') {
+            throw new Error('timeout');
+        }
+        throw e;
+    }
+}
+
 let currentDocId = null;
 let currentPageIndex = 0;
 let currentPageData = null;
@@ -2213,7 +2231,7 @@ async function describeImage(elementId) {
     }
 
     try {
-        const res = await fetch(`${API}/api/elements/${elementId}/describe-image`, { method: 'POST' });
+        const res = await fetchWithTimeout(`${API}/api/elements/${elementId}/describe-image`, { method: 'POST' }, LLM_FETCH_TIMEOUT_MS);
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail || '生成描述失败');
 
@@ -2291,11 +2309,11 @@ async function translateElement(elementId, targetLanguage) {
     }
 
     try {
-        const res = await fetch(`${API}/api/elements/${elementId}/translate`, {
+        const res = await fetchWithTimeout(`${API}/api/elements/${elementId}/translate`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ target_language: targetLanguage })
-        });
+        }, LLM_FETCH_TIMEOUT_MS);
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail || '翻译失败');
 
@@ -2323,11 +2341,11 @@ async function translateCurrentPage(targetLanguage) {
     }
 
     try {
-        const res = await fetch(`${API}/api/pages/${currentPageData.id}/translate`, {
+        const res = await fetchWithTimeout(`${API}/api/pages/${currentPageData.id}/translate`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ target_language: targetLanguage })
-        });
+        }, LLM_FETCH_TIMEOUT_MS);
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail || '翻译失败');
 
@@ -2362,11 +2380,11 @@ async function translateDocument(docId, targetLanguage) {
     document.body.appendChild(overlay);
 
     try {
-        const res = await fetch(`${API}/api/documents/${docId}/translate`, {
+        const res = await fetchWithTimeout(`${API}/api/documents/${docId}/translate`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ target_language: targetLanguage })
-        });
+        }, LLM_FETCH_TIMEOUT_MS);
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail || '翻译失败');
 
