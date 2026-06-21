@@ -13,7 +13,7 @@ API = "http://localhost:8888/api"
 
 async def setup_test_data():
     await database.init_db()
-    doc_id = await database.create_document("test.pdf", "/tmp/test.pdf", 1)
+    doc_id = await database.create_document("test.pdf", "/tmp/test.pdf", 1, 1024)
     page_id = await database.create_page(doc_id, 1, 612, 792, 2480, 3508, "/tmp/test.jpg", "/tmp/test.pdf")
     elem_id = await database.create_element(
         page_id, "Text", (10, 10, 100, 30), 0.95, 1,
@@ -103,5 +103,27 @@ def test_put_translation():
         print(f"  ❌ Error: {type(e).__name__}: {e}")
 
 
+def test_llm_functions():
+    print("\n" + "=" * 70)
+    print("Testing LLM service functions...")
+    from backend.services.llm_service import is_vision_available, describe_image_silent
+
+    vision_ok = is_vision_available()
+    print(f"is_vision_available() = {vision_ok}")
+
+    img_path = r"G:\ws\Prism PDF\tmp\ae3365ca461941228d683de19c0e3e31\output\picture_3660001.png"
+    if Path(img_path).exists():
+        print(f"\ntest describe_image_silent('{img_path}')...")
+        result = describe_image_silent(img_path)
+        if result:
+            print(f"  ✓ Success! ({len(result)} chars)")
+            print(f"  {result[:200]}...")
+        else:
+            print(f"  ✗ Returned None")
+    else:
+        print(f"\nImage path not found, skipping describe test")
+
+
 if __name__ == "__main__":
     test_put_translation()
+    test_llm_functions()
