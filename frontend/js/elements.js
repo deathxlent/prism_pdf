@@ -405,6 +405,8 @@ function openAddElementModal() {
     $('#add-element-content').value = '';
     $('#add-element-type').value = 'Text';
     $('#add-element-save-btn').disabled = false;
+    
+    ignoreNextModalCloseClick = true;
     $('#add-element-modal').classList.remove('hidden');
     
     pendingNewElement = {

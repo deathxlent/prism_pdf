@@ -83,13 +83,23 @@ document.addEventListener('keydown', (e) => {
     }
 });
 
+let ignoreNextModalCloseClick = false;
+
 document.addEventListener('click', (e) => {
+    if (ignoreNextModalCloseClick) {
+        ignoreNextModalCloseClick = false;
+        return;
+    }
+    
     const modals = $$('.modal');
     modals.forEach(modal => {
         if (!modal.classList.contains('hidden')) {
             const modalContent = modal.querySelector('.modal-content');
             if (modalContent && !modalContent.contains(e.target)) {
-                modal.classList.add('hidden');
+                const isModalTrigger = e.target.closest('[onclick*="openModal"], [onclick*="openCreateConfigModal"], [onclick*="showExportOptions"], [onclick*="openTranslatePopup"], [onclick*="openAddElementModal"]');
+                if (!isModalTrigger) {
+                    modal.classList.add('hidden');
+                }
             }
         }
     });

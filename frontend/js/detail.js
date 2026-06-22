@@ -7,7 +7,7 @@ async function loadDocumentDetail(docId) {
             apiGetStatus(docId)
         ]);
 
-        currentDocument = docRes;
+        currentDocument = docRes.document;
         currentPages = docRes.pages || [];
         updatePageNumbers();
 
@@ -15,7 +15,7 @@ async function loadDocumentDetail(docId) {
             startProgressPolling(docId);
         }
 
-        $('#detail-title').textContent = docRes.original_filename;
+        $('#detail-title').textContent = docRes.document.original_filename;
         $('#detail-status').textContent = getStatusText(statusRes.status);
         $('#detail-status').className = 'status-badge status-' + statusRes.status;
 

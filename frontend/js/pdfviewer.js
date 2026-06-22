@@ -58,7 +58,7 @@ async function renderPdfPage(page) {
                     renderAnnotations(currentElements, canvas.width, canvas.height, displayWidth, displayHeight);
                 });
             };
-            img.src = `${API}/api/file/${encodeURIComponent(page.jpg_path)}`;
+            img.src = `${API}/api/pages/${page.id}/jpg`;
         } else {
             canvas.width = 600;
             canvas.height = 800;
