@@ -1,288 +1,637 @@
-# Prism PDF — 本地高精度 PDF 解析系统
+# Prism PDF — 本地高精度 PDF 解析与翻译系统
 
-> 一个功能完整的本地 PDF 解析系统，集成多种 AI 模型，实现文档布局分析、内容提取、表格识别和结构化输出。
-
----
-
-## ✨ 功能特性
-
-### 📄 核心解析能力
-
-| 能力 | 说明 | 技术方案 |
-|------|------|----------|
-| **PDF 上传管理** | 上传、验证（加密/损坏检测）、列表、删除 | PyMuPDF |
-| **扫描件自动检测** | 识别扫描版 PDF 和乱码文本，自动切换 OCR 流程 | 文本量 + 图片占比 + CJK 乱码检测 |
-| **11 类文档布局分析** | Title / Section-header / Text / List-item / Table / Picture / Formula / Caption / Footnote / Page-header / Page-footer | YOLO26m (Document Layout) |
-| **智能阅读顺序** | 支持多栏、复杂布局的阅读顺序 | Surya Order Model + fallback 坐标排序 |
-| **文本提取** | 原生 PDF 直接提取 + 扫描件 PaddleOCR-VL 识别 | PyMuPDF / PaddleOCR-VL (GGUF) |
-| **结构化表格提取** | 支持 rowspan/colspan、跨页表格自动检测与合并 | PyMuPDF find_tables / PaddleOCR-VL |
-| **数学公式识别** | 公式区域识别并输出 LaTeX 格式 | PaddleOCR-VL |
-| **图片提取** | 自动提取文档中的图片并保存为 PNG | PyMuPDF |
-| **跨页表格合并** | 智能合并跨页断开的表格，处理空单元格吸收 | 启发式列匹配 + 内容分析 + rowspan/colspan 扩展 |
-| **页眉页脚去重** | 基于位置 IoU 和内容相似度自动去重 | 重叠检测 + 序列匹配 |
-
-### 🖥️ 前端交互
-
-- **三栏式界面**：缩略图导航 + PDF 预览 + 解析结果编辑区
-- **实时进度**：解析进度百分比 + 阶段提示
-- **人工校正**：编辑元素内容、类型、阅读顺序
-- **手动添加**：鼠标框选添加新元素
-- **Surya 重排序**：对任意页面调用 AI 重排阅读顺序
-- **布局标注查看**：YOLO 模型原始检测标注图
-- **多视图切换**：列表视图 / 书架卡片视图
-- **多格式导出**：单页 / 整文档 HTML、Markdown、单页 PDF
-- **批量导出**：全文档各页分别导出为 ZIP 压缩包
-- **LLM 配置管理**：在 UI 中配置和管理多个 LLM 提供商
+> 一个功能完整的本地 PDF 解析系统，集成多种 AI 模型，实现文档布局分析、内容提取、表格识别、机器翻译和结构化输出。
 
 ---
 
-## 🧱 技术架构
+## 📖 工具功能
+
+Prism PDF 是一款**完全本地化运行**的 PDF 文档智能解析工具，专为需要高精度文档结构化提取的场景设计。它将 PDF 文档转化为可编辑、可检索的结构化数据，支持扫描件识别和多语言翻译。
+
+### 核心能力
+
+| 功能模块 | 能力说明 |
+|---------|---------|
+| **文档管理** | PDF 上传、加密/损坏检测、文档列表、删除、批量操作 |
+| **布局分析** | 11 类文档元素识别：标题、段落、列表、表格、图片、公式、页眉页脚等 |
+| **阅读顺序** | 支持多栏、复杂排版的智能阅读顺序排序 |
+| **内容提取** | 原生 PDF 文本直接提取，扫描件/乱码自动切换 OCR 识别 |
+| **表格识别** | 完整 HTML 表格输出，支持 rowspan/colspan 跨行跨列、跨页表格自动合并 |
+| **图片提取** | 自动提取文档中的图片区域，保存为独立文件 |
+| **公式识别** | 数学公式区域检测与 LaTeX 格式输出 |
+| **机器翻译** | 单元素/单页/整文档翻译，支持自定义目标语言 |
+| **结果编辑** | Web 界面人工校正内容、调整类型、重新排序、框选添加新元素 |
+| **多格式导出** | HTML / Markdown / PDF 单页导出，支持原文和译文分别导出 |
+| **LLM 集成** | 灵活的大模型配置管理，支持多种 LLM API 提供商 |
+
+---
+
+## ✨ 亮点特性
+
+### 🎯 高精度解析
+- **双模式识别**：原生 PDF 直接提取文本（速度快、精度高），扫描件自动 OCR
+- **11 类布局元素**：YOLO26m 深度学习模型，识别标题、段落、列表、表格、图片、公式、页眉页脚等
+- **智能阅读顺序**：Surya Order 模型处理多栏、复杂排版，支持 fallback 坐标排序
+- **跨行跨列表格**：完整保留 HTML 表格结构，支持 rowspan/colspan
+
+### 🔒 完全本地化
+- **零数据上传**：所有 AI 推理在本地完成，文档不离开你的设备
+- **离线可用**：模型文件下载后可完全断网运行
+- **SQLite 存储**：轻量级嵌入式数据库，无需额外部署数据库服务
+
+### 🌍 多语言支持
+- **翻译导出**：一键翻译并导出为 HTML/Markdown
+- **灵活的 LLM 配置**：Web 界面管理多种翻译模型提供商
+- **批量翻译**：支持单页和整文档批量翻译
+
+### ⚡ 性能优化
+- **混合加速**：YOLO/Surya 可 CPU 运行，OCR 推荐 GPU 加速
+- **渐进式处理**：分页处理，大文档不会内存溢出
+- **自动降级**：GPU 不可用时自动回退 CPU
+
+### 🛠️ 开发友好
+- **RESTful API**：完整的 HTTP API，易于集成到其他系统
+- **可定制**：模块化设计，易于替换和扩展各个处理组件
+- **可视化调试**：支持查看 YOLO 布局检测标注图、原始 OCR 结果
+
+---
+
+## 💻 系统需求
+
+### 支持的操作系统
+| 系统 | 版本 | 说明 |
+|------|------|------|
+| **Windows** | 10/11 64 位 | 推荐，一键脚本支持最完善 |
+| **Linux** | Ubuntu 20.04+ / Debian 11+ / CentOS 8+ | 服务器部署推荐 |
+| **macOS** | 12+ (Monterey及以上) | **仅支持 Apple Silicon (M1/M2/M3/M4)**，不支持 Intel |
+
+---
+
+### 🪟 Windows 配置参考
+
+#### 最低配置（可运行）
+| 组件 | 规格 |
+|------|------|
+| CPU | Intel i5-6500 / AMD Ryzen 5 1600 以上 |
+| 内存 | 16 GB DDR4 |
+| 硬盘 | 50 GB 可用空间（SSD 推荐） |
+| 显卡 | 核显即可（OCR 会使用 CPU，速度较慢） |
+
+#### 推荐配置（性价比最优）
+| 组件 | 规格 |
+|------|------|
+| CPU | Intel i5-12400 / AMD Ryzen 5 5600 |
+| 内存 | 32 GB DDR4-3200 |
+| 硬盘 | 100 GB NVMe SSD |
+| 显卡 | NVIDIA RTX 3060 12GB（仅 OCR 加速用） |
+
+#### 专业配置（批量处理）
+| 组件 | 规格 |
+|------|------|
+| CPU | Intel i7-13700F / AMD Ryzen 7 7800X3D |
+| 内存 | 32 GB DDR5-5600 |
+| 硬盘 | 200 GB NVMe PCIe 4.0 SSD |
+| 显卡 | NVIDIA RTX 4070 Ti 12GB+ |
+
+---
+
+### 🐧 Linux 配置参考
+
+#### 最低配置（可运行）
+| 组件 | 规格 |
+|------|------|
+| CPU | Intel i5-6500 / AMD Ryzen 5 1600 以上 |
+| 内存 | 16 GB DDR4 |
+| 硬盘 | 50 GB 可用空间（SSD 推荐） |
+| 显卡 | 无要求（纯 CPU 模式） |
+
+#### 推荐配置（GPU 加速）
+| 组件 | 规格 |
+|------|------|
+| CPU | Intel i5-12400 / AMD Ryzen 5 5600 |
+| 内存 | 32 GB DDR4-3200 |
+| 硬盘 | 100 GB NVMe SSD |
+| 显卡 | NVIDIA RTX 3060 12GB（需安装 CUDA 12+） |
+
+> 💡 Linux 无头服务器：可无显卡运行，YOLO/Surya 使用 CPU，OCR 也可使用 CPU 模式（速度较慢）。
+
+---
+
+### 🍎 macOS Apple Silicon 配置参考
+
+| 芯片型号 | 内存 | 存储 | 推荐场景 | 预计速度 |
+|---------|------|------|---------|---------|
+| **M1** | 16GB+ | 100GB+ SSD | 个人/小型文档 | OCR ~3s/页 |
+| **M1 Pro/Max** | 32GB+ | 200GB+ SSD | 专业使用 | OCR ~2s/页 |
+| **M2** | 16GB+ | 100GB+ SSD | 个人/办公 | OCR ~2.5s/页 |
+| **M2 Pro/Max** | 32GB+ | 200GB+ SSD | 批量处理 | OCR ~1.5s/页 |
+| **M3/M4** | 16GB+ | 100GB+ SSD | 最佳体验 | OCR ~1-2s/页 |
+| **M3/M4 Pro/Max/Ultra** | 32GB+ | 512GB+ SSD | 大规模处理 | OCR <1s/页 |
+
+> ✨ **Apple Silicon 优势**：Unified Memory 架构，无需担心显存不足，Metal Framework 原生加速。
+> ⚠️ **注意**：不支持 Intel 芯片的 Mac，请使用 Linux 或 Windows。
+
+---
+
+> 📚 详细硬件需求与性能对比见 [hardware_requirements.md](hardware_requirements.md)
+
+---
+
+## 🏗️ 技术架构
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                    Web 前端                          │
-│  原生 HTML/CSS/JS · PDF.js · Font Awesome           │
-└────────────────────────┬────────────────────────────┘
-                         │ HTTP API
-┌────────────────────────▼────────────────────────────┐
-│              FastAPI 后端 (uvicorn)                   │
-│  ┌────────────────────────────────────────────────┐ │
-│  │              API 路由层 (routes.py)             │ │
-│  │  /upload /parse /status /results /export /edit │ │
-│  └──────────────────┬─────────────────────────────┘ │
-│                     │                                │
-│  ┌──────────────────▼─────────────────────────────┐ │
-│  │              解析编排服务                        │ │
-│  │  parse_service.py / pdf_service.py              │ │
-│  └──────┬────────────┬────────────┬────────────────┘ │
-│         │            │            │                   │
-│  ┌──────▼─────┐ ┌───▼────┐ ┌────▼─────────┐          │
-│  │ 布局检测    │ │阅读顺序│ │ 内容提取     │          │
-│  │ YOLO       │ │ Surya  │ │ PyMuPDF/OCR  │          │
-│  └────────────┘ └────────┘ └────┬─────────┘          │
-│                                  │                    │
-│  ┌────────────┐  ┌───────────┐ ┌▼────────────┐       │
-│  │ 表格提取   │  │ 图片提取  │ │ llama.cpp   │       │
-│  │ table_     │  │ picture_  │ │ OCR 服务     │       │
-│  │ service    │  │ service   │ │ (外部进程)   │       │
-│  └────────────┘  └───────────┘ └─────────────┘       │
-│                                                       │
-│  ┌────────────────────────────────────────────────┐  │
-│  │          SQLite 数据库 (aiosqlite)              │  │
-│  │  pdf_documents · pdf_pages · page_elements     │  │
-│  └────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                        Web 前端 (index.html)                    │
+│   三栏式界面：缩略图导航 + PDF 预览 + 解析结果编辑              │
+│   原生 HTML/CSS/JS · PDF.js · Font Awesome 6                   │
+└────────────────────────────┬────────────────────────────────────┘
+                             │ HTTP API (FastAPI)
+┌────────────────────────────▼────────────────────────────────────┐
+│                   FastAPI 后端 (uvicorn)                        │
+│  ┌──────────────────────────────────────────────────────────┐  │
+│  │                    API 路由层 (routes.py)                 │  │
+│  │  /upload /parse /status /results /export /translate ... │  │
+│  └────────────────────┬─────────────────────────────────────┘  │
+│                       │                                          │
+│  ┌────────────────────▼─────────────────────────────────────┐  │
+│  │                 主解析调度层 (parse_service.py)          │  │
+│  │    process_upload() → process_document() → _parse_page()│  │
+│  └──────┬──────────────┬──────────────┬─────────────────────┘  │
+│         │              │              │                          │
+│  ┌──────▼─────┐ ┌──────▼─────┐ ┌────▼───────────┐              │
+│  │ PDF 基础   │ │ 布局检测    │ │ 阅读顺序排序   │              │
+│  │ 服务       │ │ YOLO26m    │ │ Surya Order    │              │
+│  └──────┬─────┘ └────────────┘ └────┬───────────┘              │
+│         │                           │                          │
+│  ┌──────▼─────┐ ┌────────────┐ ┌────▼───────────┐              │
+│  │ 表格提取   │ │ 图片提取    │ │ OCR 服务       │              │
+│  │ (原生+扫描)│ │            │ │ llama.cpp VL   │              │
+│  └────────────┘ └────────────┘ └────┬───────────┘              │
+│                                     │                          │
+│  ┌─────────────────────┐    ┌──────▼──────┐                    │
+│  │  SQLite 数据库      │    │ llama-server │                    │
+│  │  (aiosqlite)        │    │ (独立进程)   │                    │
+│  └─────────────────────┘    └─────────────┘                    │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ### 技术栈明细
 
-**后端**
-- FastAPI + uvicorn（Web 框架）
-- PyMuPDF（PDF 处理）
-- Ultralytics YOLO（文档布局检测）
-- Surya（阅读顺序排序）
-- PaddleOCR-VL via llama.cpp（多模态 OCR）
-- SQLite + aiosqlite（数据持久化）
-- HuggingFace Hub（模型自动下载）
-
-**前端**
-- 原生 HTML5 / CSS3 / JavaScript
-- PDF.js（PDF 渲染）
-- Font Awesome 6（图标）
-
-**推理**
-- llama-server 外部进程（OpenAI 兼容 API）
-- GGUF 量化模型（Q4_K_M）
-
----
-
-## 📦 项目结构
-
-```
-Prism PDF/
-├── backend/
-│   ├── api/
-│   │   └── routes.py                  # 17 个 API 端点
-│   ├── services/
-│   │   ├── pdf_service.py             # PDF 验证、转图、文本提取
-│   │   ├── layout_service.py          # YOLO 布局检测 + 重叠过滤
-│   │   ├── order_service.py           # Surya 阅读顺序排序 + fallback
-│   │   ├── ocr_service_vl.py          # llama.cpp OCR 客户端
-│   │   ├── ocr_service.py             # 传统 PaddleOCR（备用）
-│   │   ├── table_service.py           # 原生/扫描件表格提取
-│   │   ├── scanned_parse_service.py   # 扫描件整页解析引擎
-│   │   ├── picture_service.py         # 图片提取
-│   │   ├── parse_service.py           # 主解析流程编排
-│   │   └── llm_config_service.py      # LLM 配置管理
-│   ├── config.py                      # 全局配置
-│   ├── database.py                    # SQLite CRUD
-│   └── main.py                        # 应用入口
-├── frontend/
-│   ├── index.html                     # 主页面 (三栏布局)
-│   ├── app.js                         # 前端逻辑 (~2000 行)
-│   └── style.css                      # 样式
-├── models/                            # AI 模型文件（自动下载）
-├── tmp/                               # 临时文件目录
-├── data.db                            # SQLite 数据库
-├── requirements.txt                   # Python 依赖
-├── llm_config.yaml                    # LLM 配置（YAML）
-├── llm_config_local.json              # LLM 配置（本地覆盖）
-├── start_all.bat                      # 一键启动脚本
-├── start_llama_server.bat             # llama.cpp 启动脚本
-├── setup.md                           # 详细环境配置指南
-├── flow.md                            # 解析流程图与设计文档
-└── hardware_requirements.md           # 硬件需求说明
-```
+| 层级 | 技术选型 | 用途 |
+|------|---------|------|
+| **Web 框架** | FastAPI + uvicorn | HTTP API 服务 |
+| **PDF 处理** | PyMuPDF (fitz) | PDF 解析、文本提取、转图 |
+| **布局检测** | Ultralytics YOLOv8 (YOLO26m) | 11 类文档元素定位 |
+| **阅读顺序** | Surya Order Model | 多栏布局阅读排序 |
+| **OCR 识别** | PaddleOCR-VL + llama.cpp | 扫描件/乱码多模态识别 |
+| **机器翻译** | 可配置 LLM (OpenAI 兼容 API) | 元素/页面/文档翻译 |
+| **数据存储** | SQLite + aiosqlite | 文档、页面、元素持久化 |
+| **前端** | 原生 HTML5/CSS3/JavaScript | 无需构建，直接运行 |
+| **PDF 渲染** | PDF.js | 浏览器端 PDF 预览 |
 
 ---
 
 ## 🚀 快速开始
 
-### 环境要求
+### 步骤 1：环境准备
 
-- Python 3.10 ~ 3.12
-- NVIDIA GPU + CUDA 12+（推荐，OCR 需要 GPU 加速）
-- 16GB+ 内存
-- 50GB+ 磁盘空间（含模型文件和依赖）
+确保已安装：
+- **Python 3.10 ~ 3.12**（推荐 3.10）
+- **CUDA Toolkit 12+**（Windows/Linux 如有 NVIDIA GPU，可选但推荐）
+- **Homebrew**（macOS 推荐，用于安装依赖）
 
-### 安装
+---
+
+### 步骤 2：一键安装（按平台选择）
+
+#### 🪟 Windows
+
+在项目根目录下打开 PowerShell，运行：
+
+```powershell
+.\setup.ps1
+```
+
+#### 🐧 Linux
+
+在终端中运行：
 
 ```bash
-# 1. 创建虚拟环境
-python -m venv venv
-venv\Scripts\activate  # Windows
+chmod +x setup.sh && ./setup.sh
+```
 
-# 2. 安装依赖
-pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+> 💡 Ubuntu/Debian 首次使用请先安装基础依赖：
+> ```bash
+> sudo apt update && sudo apt install python3 python3-pip python3-venv
+> ```
 
-# 3. 启动 OCR 服务（解析扫描件必需）
-#    编辑 start_llama_server.bat 配置路径，然后运行
-start_llama_server.bat
+#### 🍎 macOS (Apple Silicon / M系列)
 
-# 4. 启动主服务
+在终端中运行：
+
+```bash
+chmod +x setup_mac.sh && ./setup_mac.sh
+```
+
+> 💡 首次使用请先安装 Homebrew（如未安装）：
+> ```bash
+> /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+> ```
+
+---
+
+安装脚本会自动完成：
+1. ✅ 创建 Python 虚拟环境
+2. ✅ 安装所有 Python 依赖
+3. ✅ 验证环境配置
+4. ✅ 创建必要的目录
+
+> 如果手动安装，请参考 [setup.md](setup.md)
+
+---
+
+### 步骤 3：配置 OCR 服务（扫描件必需）
+
+如果需要解析扫描版 PDF 或包含乱码的文档，需要配置 llama.cpp OCR 服务。
+
+#### 🪟 Windows
+
+**1. 下载 llama.cpp**
+
+从 https://github.com/ggml-org/llama.cpp/releases 下载预编译包：
+- GPU 版本：`llama-*-bin-win-cuda-x64.zip`
+- CPU 版本：`llama-*-bin-win-cpu-x64.zip`
+
+解压到例如 `G:\llamacpp\`
+
+**2. 下载 PaddleOCR-VL 模型**
+
+访问 https://hf-mirror.com/PaddlePaddle/PaddleOCR-VL-1.6-GGUF 下载：
+- `PaddleOCR-VL-1.6.Q4_K_M.gguf`（286 MB，LLM 主干）
+- `PaddleOCR-VL-1.6-GGUF-mmproj.gguf`（841 MB，视觉编码器）
+
+放到 `G:\llamacpp\models\` 目录。
+
+**3. 修改配置**
+
+编辑 `start_llama_server.bat`，将路径改为你实际的 llama.cpp 和模型路径。
+
+#### 🐧 Linux
+
+**1. 安装 llama.cpp**
+
+方式一：下载预编译包（推荐）
+```bash
+# 从 releases 下载 llama-*-bin-ubuntu-x64.zip
+unzip llama-*-bin-ubuntu-x64.zip -d /opt/llamacpp
+```
+
+方式二：自行编译（启用 CUDA）
+```bash
+git clone https://github.com/ggml-org/llama.cpp
+cd llama.cpp && mkdir build && cd build
+cmake .. -DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build . --config Release
+```
+
+**2. 下载模型**
+
+```bash
+pip install huggingface_hub
+export HF_ENDPOINT=https://hf-mirror.com
+mkdir -p /opt/llamacpp/models
+huggingface-cli download PaddlePaddle/PaddleOCR-VL-1.6-GGUF --local-dir /opt/llamacpp/models
+```
+
+**3. 修改配置**
+
+编辑 `start_llama_server.sh`，调整 `LLAMACPP_DIR` 和模型路径。
+
+#### 🍎 macOS (Apple Silicon)
+
+**1. 安装 llama.cpp**
+
+方式一：通过 Homebrew（最简单）
+```bash
+brew install llama.cpp
+```
+
+方式二：下载预编译包
+```bash
+# 下载 llama-*-bin-macos-arm64.zip 解压到 /opt/llamacpp
+```
+
+方式三：自行编译（启用 Metal）
+```bash
+git clone https://github.com/ggml-org/llama.cpp
+cd llama.cpp && mkdir build && cd build
+cmake .. -DGGML_METAL=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build . --config Release
+```
+
+**2. 下载模型**
+
+```bash
+pip install huggingface_hub
+export HF_ENDPOINT=https://hf-mirror.com
+mkdir -p /opt/llamacpp/models
+huggingface-cli download PaddlePaddle/PaddleOCR-VL-1.6-GGUF --local-dir /opt/llamacpp/models
+```
+
+**3. 修改配置**
+
+编辑 `start_llama_server_mac.sh`，调整路径（Homebrew 安装通常无需修改）。
+
+---
+
+### 步骤 4：启动服务（按平台选择）
+
+#### 🪟 Windows
+
+**方式一：一键启动（推荐）**
+
+```powershell
+.\start_all.bat
+```
+
+**方式二：分开启动（方便查看日志）**
+
+```powershell
+# 终端 1：启动 OCR 服务（如需）
+.\start_llama_server.bat
+
+# 终端 2：启动主服务
 python -m backend.main
-
-# 5. 访问 http://localhost:8000
 ```
 
-> 首次启动会自动下载 YOLO 和 Surya 模型（约 600MB）。
-> 详见 [setup.md](setup.md) 完整配置指南。
+#### 🐧 Linux
+
+**方式一：一键启动（推荐）**
+
+```bash
+chmod +x start_all.sh start_llama_server.sh
+./start_all.sh
+```
+
+**方式二：分开启动（方便查看日志）**
+
+```bash
+# 终端 1：启动 OCR 服务（如需）
+./start_llama_server.sh
+
+# 终端 2：启动主服务
+source venv/bin/activate
+python -m backend.main
+```
+
+#### 🍎 macOS (Apple Silicon)
+
+**方式一：一键启动（推荐）**
+
+```bash
+chmod +x start_all_mac.sh start_llama_server_mac.sh
+./start_all_mac.sh
+```
+
+**方式二：分开启动（方便查看日志）**
+
+```bash
+# 终端 1：启动 OCR 服务（如需）
+./start_llama_server_mac.sh
+
+# 终端 2：启动主服务
+source venv/bin/activate
+python -m backend.main
+```
 
 ---
 
-## ⚙️ 解析流程
+### 步骤 5：开始使用
 
-```
-上传 PDF → 验证(加密/损坏) → 页面预处理
-  ├─ 每页转 JPG (200 DPI)
-  ├─ 提取单页 PDF
-  └─ 扫描件检测 (文本量 + 图片占比)
-       │
-       ▼
-布局检测 [YOLO26m] → 11 类元素定位 → 重叠过滤
-       │
-       ▼
-阅读顺序 [Surya Order] → 多栏布局排序 → GPU不足时用坐标 fallback
-       │
-       ▼
-逐页内容提取:
-  ├─ 原生 PDF 页 → PyMuPDF 提取文本 + find_tables
-  ├─ 扫描件页   → PaddleOCR-VL 整页 Table Recognition
-  └─ 跨页表格检测 → 列匹配 + 空单元格吸收 + rowspan/colspan 更新
-       │
-       ▼
-结果存储 (SQLite) → Web 编辑校正 → 导出 (HTML/Markdown/PDF)
-```
+浏览器打开 http://localhost:8000
+
+1. 点击"上传 PDF"选择文档
+2. 点击"开始解析"等待处理完成
+3. 在右侧查看和编辑解析结果
+4. 点击"导出"选择格式下载（支持原文/译文分别导出）
 
 ---
 
-## 📊 数据库模型
+## ⚡ 性能和效果优化
 
-| 表 | 字段 | 说明 |
-|----|------|------|
-| `pdf_documents` | id, filename, file_size, page_count, status, error_message | 文档元数据 |
-| `pdf_pages` | id, document_id, page_number, jpg_path, is_scanned, is_ordered | 页面信息 |
-| `page_elements` | id, page_id, element_type, bbox, confidence, reading_order, content, cross_page_group | 文档元素 |
+### 模型替换指南
 
----
+#### 1. 布局检测模型（YOLO）
 
-## 🧩 建议的新功能 & 优化方向
+当前使用：`Armaggheddon/yolo26-document-layout`
 
-### 新功能候选
+可替换为其他文档布局模型：
 
-| 优先级 | 功能 | 说明 |
+| 候选模型 | 来源 | 精度 | 速度 | 说明 |
+|---------|------|------|------|------|
+| **YOLOv8-DocLayout** | HuggingFace | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | 当前使用，综合表现好 |
+| **LayoutLMv3** | Microsoft | ⭐⭐⭐⭐⭐ | ⭐⭐ | 更高精度，速度较慢 |
+| **DocAnalyzer** | PaddlePaddle | ⭐⭐⭐⭐ | ⭐⭐⭐ | 百度出品 |
+| **YOLOR-Doc** | HuggingFace | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | 轻量快速 |
+
+**替换方式**：修改 `backend/config.py` 中的 `YOLO_MODEL_REPO` 和 `YOLO_MODEL_FILE`。
+
+#### 2. OCR 识别模型（PaddleOCR-VL）
+
+当前使用：`PaddleOCR-VL-1.6 Q4_K_M` via llama.cpp
+
+可替换方案：
+
+| 方案 | 精度 | 速度 | 部署难度 | 说明 |
+|------|------|------|---------|------|
+| **PaddleOCR-VL** | ⭐⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐ | 当前使用，多模态，效果好 |
+| **Qwen2-VL** | ⭐⭐⭐⭐⭐ | ⭐⭐ | ⭐⭐ | 通义千问视觉模型，精度更高 |
+| **PaddleOCR (传统)** | ⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐ | 速度快，纯 Python |
+| **EasyOCR** | ⭐⭐⭐ | ⭐⭐⭐ | ⭐ | 支持 80+ 语言 |
+| **Tesseract** | ⭐⭐ | ⭐⭐⭐ | ⭐ | 开源老牌，中文效果一般 |
+
+**量化级别选择**：
+| 级别 | 文件大小 | 精度 | 显存占用 | 推荐场景 |
+|------|---------|------|---------|---------|
+| Q2_K | ~180 MB | ⭐⭐ | ~600 MB | 极低显存 |
+| Q4_K_M | ~286 MB | ⭐⭐⭐⭐ | ~1.2 GB | **推荐，性价比最高** |
+| Q5_K_M | ~350 MB | ⭐⭐⭐⭐⭐ | ~1.5 GB | 追求精度 |
+| Q6_K | ~420 MB | ⭐⭐⭐⭐⭐ | ~1.8 GB | 最高精度 |
+
+#### 3. 翻译模型（LLM）
+
+当前支持 OpenAI 兼容 API，可灵活配置：
+
+| 模型 | 翻译质量 | 速度 | 成本 | 说明 |
+|------|---------|------|------|------|
+| **GPT-4o** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ | 高 | 最佳翻译质量 |
+| **GPT-3.5-Turbo** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | 中 | 性价比高 |
+| **DeepSeek-V3** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ | 低 | 国产模型，中文优秀 |
+| **Qwen2.5-72B** | ⭐⭐⭐⭐ | ⭐⭐⭐ | 低 | 可本地部署 |
+| **本地模型** | ⭐⭐⭐ | ⭐⭐⭐⭐⭐ | 免费 | llama.cpp 运行本地 LLM |
+
+在 Web 界面的 **"LLM 配置"** 面板中添加和切换翻译模型。
+
+### 性能调优
+
+#### 1. GPU 显存优化
+
+```python
+# backend/config.py
+YOLO_DEVICE = "cuda"  # 使用 GPU
+YOLO_IMG_SIZE = 1024  # 降低推理尺寸，速度↑ 精度↓
+```
+
+```batch
+REM start_llama_server.bat
+-ngl 99          # 全部层 GPU 加速
+-c 2048          # 降低上下文长度，节省显存
+```
+
+#### 2. CPU 性能优化
+
+```batch
+REM start_llama_server.bat
+set OMP_NUM_THREADS=8   # 设置等于物理核心数
+-t 8                    # CPU 线程数
+```
+
+```python
+# backend/config.py
+YOLO_DEVICE = "cpu"
+YOLO_IMG_SIZE = 1280    # CPU 推理可以用较大尺寸
+```
+
+#### 3. 解析速度优化
+
+| 优化项 | 效果 | 代价 |
 |--------|------|------|
-| 🔴 **高** | **全文搜索** | 跨文档搜索解析后的文本内容，sqlite FTS5 即可实现 |
-| 🔴 **高** | **批量上传** | 一次上传多个 PDF，批量排队解析 |
-| 🔴 **高** | **DOCX 导出** | 将解析结果导出为 Word 文档，保留格式 |
-| 🟡 **中** | **AI 摘要/关键词** | 调用 LLM 生成文档摘要和关键词标签 |
-| 🟡 **中** | **文档标签/收藏** | 用户自定义标签体系和收藏夹 |
-| 🟡 **中** | **暗色模式** | 前端 CSS 变量主题切换 |
-| 🟡 **中** | **水印检测/去除** | 检测并标记文档中的水印区域 |
-| 🟡 **中** | **试卷/表单识别** | 针对试卷、表格类文档的特殊优化模式 |
-| 🟢 **低** | **文档版本管理** | 同一 PDF 多次解析的版本对比 |
-| 🟢 **低** | **用户认证系统** | 多用户登录权限管理 |
-| 🟢 **低** | **REST API 文档** | 自动生成 Swagger/OpenAPI 文档增强 |
-| 🟢 **低** | **图表数据提取** | 从柱状图/折线图中提取数据 |
+| 降低 YOLO_IMG_SIZE 到 1024 | 布局检测速度 +30% | 小元素漏检率略增 |
+| 禁用 Surya，使用坐标排序 fallback | 阅读排序速度 +200% | 多栏布局顺序可能错乱 |
+| 提高扫描件检测阈值 | 减少不必要的 OCR | 可能漏判扫描件 |
+| 关闭页眉页脚去重 | 解析速度 +5% | 可能有重复页眉页脚 |
 
-### 性能优化
+#### 4. 批量处理优化
 
-| 问题 | 优化方案 |
-|------|----------|
-| OCR 逐区域串行处理 | 并行化 OCR 请求（当前每个区域串行 `ocr_batch` 实为串行循环） |
-| YOLO + Surya 阻塞主线程 | 两者已在 `asyncio.to_thread` 中运行，但 Surya 推理加全局锁可优化 |
-| 200 DPI 固定分辨率 | 支持自适应 DPI（根据 PDF 清晰度自动选择 150/200/300 DPI） |
-| 大文档内存溢出 | 分页流式处理，避免一次性加载所有页面 |
-| 模型重复下载 | 支持离线模式，缓存模型文件 |
-
-### 代码质量提升
-
-| 问题 | 建议 |
-|------|------|
-| `routes.py` 3 份重复 HTML 生成代码 | 抽取为公共 HTML 渲染模块 |
-| `_parse_page` 600+ 行 | 拆分为原生流/扫描件流两个独立函数 |
-| 配置硬编码 | 支持 .env 文件 + 环境变量覆盖 |
-| 零测试覆盖 | 添加 pytest 单元测试 + API 集成测试 |
-| 前端无构建工具 | 引入 Vite + TypeScript（可选）|
-| 全局锁粒度粗 | 模型级 + 页面级精细锁 |
-
-### 架构演进
-
-- **Docker 容器化**：一键部署，消除环境依赖问题
-- **消息队列**：引入 Redis/Celery 管理异步解析任务，支持任务优先级
-- **分布式 OCR**：多 GPU 节点并行 OCR，支持大规模批量处理
-- **WebSocket 推送**：替代前端轮询，实时推送解析进度
+- 使用多进程/多线程并行处理多个文档
+- 将 OCR 服务部署在独立机器，通过网络调用
+- 使用 SSD 存储临时文件和数据库
 
 ---
 
-## 📝 导出格式
+## 📦 外部依赖项目
 
-| 格式 | 支持范围 | 特点 |
-|------|----------|------|
-| **HTML** | 单页 / 整文档 / ZIP 批量 | 保留 rowspan/colspan，推荐 |
-| **Markdown** | 单页 | 轻量，表格跨行列信息丢失 |
-| **单页 PDF** | 单页 | 原始 PDF 页面下载 |
+### AI 模型
+
+| 项目 | 许可证 | 用途 |
+|------|--------|------|
+| [YOLO26m Document Layout](https://huggingface.co/Armaggheddon/yolo26-document-layout) | Apache-2.0 | 文档布局检测 |
+| [Surya](https://github.com/VikParuchuri/surya) | GPL-3.0 | 文档阅读顺序排序 |
+| [PaddleOCR-VL](https://huggingface.co/PaddlePaddle/PaddleOCR-VL-1.6-GGUF) | Apache-2.0 | 多模态 OCR 识别 |
+
+### 推理框架
+
+| 项目 | 许可证 | 用途 |
+|------|--------|------|
+| [llama.cpp](https://github.com/ggml-org/llama.cpp) | MIT | 大模型本地推理 |
+| [Ultralytics YOLOv8](https://github.com/ultralytics/ultralytics) | AGPL-3.0 | 目标检测推理框架 |
+| [PyTorch](https://pytorch.org/) | BSD-3 | 深度学习框架 |
+
+### 核心库
+
+| 项目 | 许可证 | 用途 |
+|------|--------|------|
+| [PyMuPDF](https://github.com/pymupdf/PyMuPDF) | AGPL-3.0 | PDF 处理核心库 |
+| [FastAPI](https://fastapi.tiangolo.com/) | MIT | Web API 框架 |
+| [PaddlePaddle](https://github.com/PaddlePaddle/Paddle) | Apache-2.0 | 百度深度学习框架 |
+| [PDF.js](https://github.com/mozilla/pdf.js) | Apache-2.0 | 浏览器端 PDF 渲染 |
+| [Pillow](https://python-pillow.org/) | HPND | Python 图像处理 |
+| [HuggingFace Hub](https://github.com/huggingface/huggingface_hub) | Apache-2.0 | 模型下载管理 |
+
+### 前端库
+
+| 项目 | 许可证 | 用途 |
+|------|--------|------|
+| [Font Awesome](https://fontawesome.com/) | CC BY 4.0 / MIT | 图标库 |
 
 ---
 
-## 📚 文档索引
+## 📁 项目结构
 
-| 文档 | 内容 |
-|------|------|
-| [setup.md](setup.md) | 完整环境配置指南（llama.cpp 编译、模型下载、GPU/CPU 配置） |
-| [flow.md](flow.md) | 解析流程详细设计说明 |
-| [hardware_requirements.md](hardware_requirements.md) | 硬件需求分析与配置建议 |
+```
+Prism PDF/
+├── backend/
+│   ├── api/
+│   │   └── routes.py                  # 20+ API 端点
+│   ├── services/
+│   │   ├── parse_service.py           # 主解析流程编排
+│   │   ├── pdf_service.py             # PDF 验证、转图、文本提取
+│   │   ├── layout_service.py          # YOLO 布局检测 + 重叠过滤
+│   │   ├── order_service.py           # Surya 阅读顺序排序
+│   │   ├── ocr_service_vl.py          # llama.cpp OCR 客户端
+│   │   ├── table_service.py           # 原生/扫描件表格提取
+│   │   ├── picture_service.py         # 图片提取
+│   │   ├── document_service.py        # 翻译、删除、重解析
+│   │   ├── export_service.py          # HTML/Markdown 导出（含译文）
+│   │   ├── llm_config_service.py      # LLM 配置管理
+│   │   └── llm_service.py             # LLM 调用（翻译等）
+│   ├── config.py                      # 全局配置
+│   ├── database.py                    # SQLite 数据库操作
+│   └── main.py                        # 应用入口
+├── frontend/
+│   ├── index.html                     # 主页面（三栏布局）
+│   ├── detail.html                    # 文档详情页
+│   ├── js/
+│   │   ├── app.js                     # 列表页逻辑
+│   │   ├── detail.js                  # 详情页逻辑
+│   │   ├── export.js                  # 导出功能
+│   │   └── llm-config.js              # LLM 配置管理
+│   └── css/
+│       └── style.css                  # 全局样式
+├── models/                            # AI 模型文件（自动下载）
+├── tmp/                               # 临时文件目录
+├── useless/                           # 测试脚本和工具
+├── data.db                            # SQLite 数据库（自动创建）
+├── LICENSE                            # MIT 许可证
+├── README.md                          # 本文档
+├── setup.md                           # 详细环境配置指南
+├── flow.md                            # 解析流程详细设计
+├── hardware_requirements.md           # 硬件需求文档
+├── requirements.txt                   # Python 依赖
+│
+│  🪟 Windows 脚本
+├── setup.ps1                          # Windows 一键安装脚本
+├── start_all.bat                      # Windows 一键启动脚本
+└── start_llama_server.bat             # Windows OCR 服务启动脚本
+│
+│  🐧 Linux 脚本
+├── setup.sh                           # Linux 一键安装脚本
+├── start_all.sh                       # Linux 一键启动脚本
+└── start_llama_server.sh              # Linux OCR 服务启动脚本
+│
+│  🍎 macOS Apple Silicon (M系列) 脚本
+├── setup_mac.sh                       # macOS M系列 一键安装脚本
+├── start_all_mac.sh                   # macOS M系列 一键启动脚本
+└── start_llama_server_mac.sh          # macOS M系列 OCR 服务启动脚本
+```
+
+---
+
+## 🤝 致谢
+
+感谢以下开源项目和团队的贡献：
+
+- [Ultralytics](https://github.com/ultralytics) — YOLO 目标检测框架
+- [VikParuchuri](https://github.com/VikParuchuri) — Surya 文档分析工具
+- [PaddlePaddle](https://github.com/PaddlePaddle) — 百度飞桨深度学习平台
+- [llama.cpp](https://github.com/ggml-org/llama.cpp) — 高效的本地大模型推理框架
+- [PyMuPDF](https://github.com/pymupdf/PyMuPDF) — 强大的 PDF 处理库
+- [FastAPI](https://github.com/tiangolo/fastapi) — 现代化的 Python Web 框架
 
 ---
 
 ## 📄 License
 
-本项目仅供学习和研究使用。
+本项目采用 [MIT License](LICENSE) 开源。
 
-## 🤝 致谢
-
-- [YOLO26m Document Layout](https://huggingface.co/Armaggheddon/yolo26-document-layout) — 文档布局检测模型
-- [Surya](https://github.com/VikParuchuri/surya) — 文档阅读顺序排序
-- [PaddleOCR-VL](https://huggingface.co/PaddlePaddle/PaddleOCR-VL-1.6-GGUF) — 多模态 OCR 模型
-- [llama.cpp](https://github.com/ggml-org/llama.cpp) — 大模型推理框架
-- [PyMuPDF](https://github.com/pymupdf/PyMuPDF) — PDF 处理库
+> ⚠️ 注意：部分外部依赖项目使用不同的开源许可证（如 AGPL-3.0、GPL-3.0 等），使用时请遵守相应许可证条款。

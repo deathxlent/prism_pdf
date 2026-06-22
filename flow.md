@@ -1,44 +1,47 @@
-# Prism PDF 整体解析流程
+# Prism PDF 解析流程设计文档
 
-## 整体架构
+## 整体架构总览
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                              Web 前端 (index.html)                      │
-│  ┌─────────────┐  ┌───────────────┐  ┌───────────────────────────────┐ │
-│  │  缩略图导航 │  │  PDF 预览区   │  │  解析结果编辑区               │ │
-│  └─────────────┘  └───────────────┘  └───────────────────────────────┘ │
-└─────────────────────────────────────┬───────────────────────────────────┘
-                                      │ HTTP API
-                                      ▼
+│                           Web 前端                                       │
+│  ┌──────────────┐  ┌───────────────┐  ┌───────────────────────────────┐ │
+│  │ 文档列表页   │  │ 详情页-缩略图 │  │ 详情页-解析结果编辑区         │ │
+│  │ (index.html) │  │ + PDF 预览    │  │ (元素编辑/翻译/导出)          │ │
+│  └──────────────┘  └───────────────┘  └───────────────────────────────┘ │
+└──────────────────────────────┬──────────────────────────────────────────┘
+                               │ HTTP API
+                               ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                          FastAPI 后端 (main.py)                        │
+│                      FastAPI 后端 (main.py)                             │
 │  ┌───────────────────────────────────────────────────────────────────┐  │
 │  │                        API 路由层 (routes.py)                     │  │
-│  │  /upload, /parse, /status, /results, /export, /documents         │  │
-│  └─────────────────────────────────────┬─────────────────────────────┘  │
-│                                        │                                │
-│  ┌─────────────────────────────────────▼─────────────────────────────┐  │
+│  │  /upload  /parse  /status  /results  /export  /translate  ...    │  │
+│  └──────────────────────────────┬────────────────────────────────────┘  │
+│                                 │                                        │
+│  ┌──────────────────────────────▼────────────────────────────────────┐  │
 │  │                     主解析调度层 (parse_service.py)               │  │
-│  │  process_upload() → process_document() → _parse_page()           │  │
-│  └──────────┬───────────────────┬───────────────────┬────────────────┘  │
-│             │                   │                   │                   │
-│  ┌──────────▼───────┐  ┌────────▼──────┐  ┌────────▼────────┐          │
-│  │  PDF 基础服务    │  │  布局检测服务 │  │  阅读顺序服务   │          │
-│  │  pdf_service.py  │  │ layout_service│  │ order_service   │          │
-│  └──────────┬───────┘  └────────┬──────┘  └────────┬────────┘          │
-│             │                   │                   │                   │
-│  ┌──────────▼───────┐  ┌────────▼──────┐  ┌────────▼────────┐          │
-│  │  表格提取服务    │  │  图片提取服务 │  │  OCR 服务       │          │
-│  │ table_service.py │  │picture_service│  │ ocr_service_vl  │          │
-│  └──────────┬───────┘  └───────────────┘  └────────┬────────┘          │
-│             │                                        │                   │
-│  ┌──────────▼───────┐                     ┌──────────▼────────┐          │
-│  │   数据库层       │                     │ llama.cpp 服务器  │          │
-│  │  database.py     │                     │ (外部独立进程)    │          │
-│  └──────────────────┘                     └───────────────────┘          │
+│  │   process_upload() → process_document() → _parse_page()          │  │
+│  └────────┬───────────────────┬───────────────────┬────────────────┘  │
+│           │                   │                   │                     │
+│  ┌────────▼───────┐  ┌────────▼──────┐  ┌────────▼────────┐            │
+│  │  PDF 基础服务  │  │  布局检测服务 │  │  阅读顺序服务   │            │
+│  │ pdf_service.py │  │ layout_service│  │ order_service   │            │
+│  └────────┬───────┘  └────────┬──────┘  └────────┬────────┘            │
+│           │                   │                   │                     │
+│  ┌────────▼───────┐  ┌────────▼──────┐  ┌────────▼────────┐            │
+│  │  表格提取服务  │  │  图片提取服务 │  │  OCR 服务       │            │
+│  │ table_service  │  │picture_service│  │ ocr_service_vl  │            │
+│  └────────┬───────┘  └───────────────┘  └────────┬────────┘            │
+│           │                                        │                    │
+│  ┌────────▼───────┐                     ┌──────────▼────────┐           │
+│  │   数据库层     │                     │ llama.cpp 服务器  │           │
+│  │  database.py   │                     │ (外部独立进程)    │           │
+│  └────────────────┘                     └───────────────────┘           │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
+
+---
 
 ## 一、文档上传与验证流程
 
@@ -50,21 +53,36 @@ POST /api/upload
     │
     ▼
 validate_pdf() [pdf_service.py:22]
-    ├─ 尝试打开 PDF
-    ├─ 检查是否加密 → 若加密尝试空密码认证
-    │   └─ 仍加密 → 返回错误，拒绝上传
-    ├─ 检查文件有效性 → 损坏文件返回错误
-    └─ 获取页数
+    │
+    ├─ 尝试用 PyMuPDF 打开 PDF
+    │
+    ├─ 检查是否加密
+    │   ├─ 未加密 → 继续
+    │   └─ 已加密 → 尝试空密码认证
+    │       ├─ 认证成功 → 继续
+    │       └─ 认证失败 → 返回错误，拒绝上传
+    │
+    ├─ 检查文件有效性
+    │   └─ 损坏文件 → 返回错误
+    │
+    └─ 获取页数、文件大小等元信息
     │
     ▼
-create_document() [database.py:85]
-    ├─ 生成唯一文件名保存到 tmp/ 目录
-    ├─ 记录文档元数据（文件名、路径、大小、页数）
-    └─ 状态: uploaded → validated
+保存文件到 tmp/{uuid}.pdf
+    │
+    ▼
+create_document() [database.py]
+    ├─ 插入 pdf_documents 表
+    │   ├─ 状态: uploaded
+    │   ├─ 记录文件名、路径、大小、页数
+    │   └─ 记录创建时间
+    └─ 返回 document_id
     │
     ▼
 返回 document_id 和 page_count
 ```
+
+---
 
 ## 二、解析任务启动流程
 
@@ -72,354 +90,581 @@ create_document() [database.py:85]
 POST /api/parse/{doc_id}
     │
     ▼
-检查文档状态
-    ├─ 若 processing → 返回"已在处理中"
-    ├─ 若 completed → 返回"已完成"
+检查文档状态 (get_document)
     │
-    ▼
-创建异步任务 process_document()
-    │
-    ▼
-返回"解析已开始"
-```
-
-## 三、完整解析流程 (process_document)
-
-### 阶段 1：初始化与页面预处理 (0% - 30%)
-
-```
-set_parse_progress(doc_id, "initializing", 5)
+    ├─ status = processing → 返回 "已在处理中"
+    ├─ status = completed  → 返回 "已完成"
+    └─ status = uploaded / failed → 继续
     │
     ▼
 更新文档状态为 processing
     │
     ▼
-prepare_pages() [pdf_service.py:134]
-    ├─ 为每个页面执行：
-    │   ├─ convert_page_to_jpg() → 200 DPI 转 JPG
-    │   ├─ save_single_page_pdf() → 提取单页 PDF
-    │   └─ is_page_scanned() → 扫描件检测
-    │       ├─ 提取页面文本
-    │       ├─ 文本 < 10 字符 → 可能是扫描件
-    │       │   └─ 检查是否只有 1 张大图占比 ≥ 80%
-    │       └─ 返回 is_scanned 标记
+创建异步任务:
+    asyncio.create_task(process_document(doc_id))
     │
     ▼
-create_page() → 为每页创建数据库记录
+返回 "解析已开始"
+```
+
+> 💡 解析任务在后台异步执行，前端通过轮询 `/api/status/{doc_id}` 获取进度。
+
+---
+
+## 三、完整解析流程 (process_document)
+
+### 阶段 1：初始化与页面预处理 (0% ~ 30%)
+
+```
+set_parse_progress(doc_id, "initializing", 5)
+    │
+    ▼
+prepare_pages() [pdf_service.py]
+    │
+    ├─ 为每个页面执行:
+    │   │
+    │   ├─ convert_page_to_jpg()
+    │   │   ├─ 按 DEFAULT_DPI (默认 200 DPI) 渲染页面
+    │   │   ├─ 保存为 tmp/{doc_id}/page_{n}.jpg
+    │   │   └─ 记录图片尺寸 (jpg_width, jpg_height)
+    │   │
+    │   ├─ save_single_page_pdf()
+    │   │   └─ 提取单页 PDF，保存为 tmp/{doc_id}/page_{n}.pdf
+    │   │
+    │   └─ is_page_scanned()
+    │       ├─ 提取页面文本 (PyMuPDF get_text())
+    │       ├─ 文本字符数 < SCAN_TEXT_THRESHOLD (默认 10) → 可疑
+    │       │   └─ 检查是否只有 1 张大图占页面面积 ≥ 80%
+    │       │       ├─ 是 → is_scanned = true
+    │       │       └─ 否 → is_scanned = false
+    │       └─ 文本充足 → is_scanned = false
+    │
+    └─ 为每页创建 pdf_pages 数据库记录
     │
     ▼
 更新文档状态为 pages_ready
 ```
 
-### 阶段 2：批量布局检测 (30% - 50%)
+### 阶段 2：批量布局检测 (30% ~ 50%)
 
 ```
-detect_layout_batch() [layout_service.py:289]
-    ├─ 首次调用时下载/加载 YOLO26m 模型
-    │   ├─ 从 HuggingFace 下载 yolo26m_doc_layout.pt
-    │   └─ 支持 CUDA 加速（如果可用）
+detect_layout_batch() [layout_service.py]
     │
-    ├─ 批量推理所有页面图片 (imgsz=1280)
+    ├─ 首次调用时:
+    │   ├─ 从 HuggingFace 下载 YOLO26m 模型
+    │   │   └─ 模型仓库: Armaggheddon/yolo26-document-layout
+    │   ├─ 加载模型到 YOLO_DEVICE (cuda / cpu)
+    │   └─ 全局单例缓存
     │
-    ├─ 解析检测结果：
-    │   ├─ 11 类元素：Title, Section-header, Text, List-item,
-    │   │             Table, Picture, Formula, Caption, Footnote,
-    │   │             Page-header, Page-footer
-    │   ├─ 每个检测结果包含：bbox, confidence, class_id
+    ├─ 收集所有页面图片路径
+    │
+    ├─ 批量推理:
+    │   └─ model.predict(images, imgsz=YOLO_IMG_SIZE, conf=0.25)
+    │
+    ├─ 解析检测结果 (每页):
+    │   ├─ 支持 11 类元素:
+    │   │   ├─ Title (标题)
+    │   │   ├─ Section-header (章节标题)
+    │   │   ├─ Text (正文段落)
+    │   │   ├─ List-item (列表项)
+    │   │   ├─ Table (表格)
+    │   │   ├─ Picture (图片)
+    │   │   ├─ Formula (公式)
+    │   │   ├─ Caption (图/表标题)
+    │   │   ├─ Footnote (脚注)
+    │   │   ├─ Page-header (页眉)
+    │   │   └─ Page-footer (页脚)
+    │   │
+    │   ├─ 每个检测结果包含:
+    │   │   ├─ bbox: [x0, y0, x1, y1] (像素坐标)
+    │   │   ├─ confidence: 0.0 ~ 1.0
+    │   │   └─ class_id: 类别 ID
+    │   │
     │   └─ 保存原始检测数据用于调试
     │
-    └─ remove_overlapping_elements() → 过滤重叠元素
-        ├─ 计算 IoU (交并比)
-        ├─ 包含关系处理：保留大的、非 Text 的
-        ├─ 重叠处理：非 Text 优先于 Text
-        └─ 同类型：保留 confidence 高的
+    └─ remove_overlapping_elements() → 重叠过滤
+        │
+        ├─ 计算所有检测框两两之间的 IoU (交并比)
+        │
+        ├─ 包含关系处理 (IoU ≥ 0.9 且面积差大):
+        │   └─ 保留较大的、非 Text 类型的
+        │
+        ├─ 部分重叠处理 (IoU ≥ 0.5):
+        │   └─ 非 Text 类型优先于 Text 类型
+        │
+        └─ 同类型重叠:
+            └─ 保留 confidence 高的
 ```
 
-### 阶段 3：阅读顺序排序 (50% - 55%)
+### 阶段 3：阅读顺序排序 (50% ~ 55%)
 
 ```
-assign_reading_order_batch() [order_service.py:195]
-    ├─ 加载 Surya Order 模型（首次调用自动下载）
+assign_reading_order_batch() [order_service.py]
     │
-    ├─ batch_ordering() → 批量处理所有页面
-    │   └─ Surya 模型输出每个 bbox 的阅读顺序 position
+    ├─ 首次调用时:
+    │   ├─ 加载 Surya Order 模型
+    │   │   └─ 模型仓库: vikp/surya_order
+    │   └─ 加载到 SURYA_ORDER_DEVICE (cuda / cpu)
+    │
+    ├─ 准备输入数据:
+    │   └─ 每页: 页面图片 + 所有 bbox
+    │
+    ├─ batch_ordering() → Surya 模型推理
+    │   └─ 输出每个 bbox 的阅读顺序位置 (position)
     │
     ├─ 匹配 YOLO 检测框与 Surya 结果
     │   └─ 使用 IoU 匹配，找到最接近的阅读顺序
     │
-    ├─ 失败降级：fallback 排序
-    │   └─ 按 bbox 的 y1, x1 坐标排序（从上到下，从左到右）
+    ├─ 失败降级 fallback 排序:
+    │   └─ 按 bbox 的 (y1, x1) 坐标排序
+    │       ├─ 先从上到下 (y1 升序)
+    │       └─ 同一行从左到右 (x1 升序)
     │
-    └─ 重新编号 reading_order 从 0 开始
+    └─ 重新编号 reading_order 从 0 开始连续编号
 ```
 
-### 阶段 4：逐页内容解析 (55% - 95%)
+### 阶段 4：逐页内容解析 (55% ~ 95%)
 
 对每个页面调用 `_parse_page()`：
 
 ```
-┌─ 检测乱码 detect_garbled_text()
-│   ├─ 统计中文字符总数
-│   ├─ 统计乱码字符（0xfffd, 控制字符等）
-│   └─ 乱码比例 ≥ 30% → 强制 OCR
+┌─ detect_garbled_text() → 中文乱码检测
+│   ├─ 统计页面中文字符总数
+│   ├─ 统计乱码字符 (0xfffd, 控制字符等)
+│   └─ 乱码比例 ≥ GARBLE_CJK_THRESHOLD (30%) → 强制 OCR
 │
 ├─ 确定 force_ocr = is_scanned or has_garbled
 │
-├─ 收集待处理任务（批处理优化）：
-│   ├─ Text 类 + force_ocr → OCR 任务
+├─ 收集待处理任务 (批处理优化):
+│   ├─ Text/Title/Section-header/List-item/Caption/Footnote + force_ocr → OCR 任务
 │   ├─ Formula → 公式 OCR 任务
 │   └─ Table + force_ocr → 表格 OCR 任务
 │
-├─ 批量执行 OCR（调用 llama.cpp 服务器）：
-│   └─ ocr_batch() → 一次性发送所有区域
+├─ 批量执行 OCR:
+│   └─ ocr_batch() → 一次性发送所有区域到 llama.cpp 服务器
 │
-├─ 遍历每个元素提取内容：
+├─ 遍历每个元素，按类型提取内容:
 │   │
-│   ├─ [Text / Section-header / List-item / Title 等]
-│   │   ├─ force_ocr → 使用 OCR 结果
-│   │   └─ 否则 → extract_text_in_region() 从 PDF 提取
+│   ├─ [Text / Section-header / List-item / Title / Caption / Footnote]
+│   │   ├─ force_ocr = true  → 使用 OCR 结果
+│   │   └─ force_ocr = false → extract_text_in_region()
+│   │       ├─ 坐标转换: JPG 像素 → PDF 点坐标 (× 72/DPI)
+│   │       └─ PyMuPDF 提取区域内文本
 │   │
-│   ├─ [Formula]
-│   │   ├─ force_ocr → 使用公式 OCR 结果
-│   │   └─ 否则 → ocr_formula() 调用 VL 模型
+│   ├─ [Formula 公式]
+│   │   ├─ force_ocr = true  → 使用 OCR 结果
+│   │   └─ force_ocr = false → ocr_formula() 调用 VL 模型
+│   │       └─ Prompt: "Please recognize this formula and output LaTeX format:"
 │   │
-│   ├─ [Picture]
-│   │   └─ extract_picture() → 裁剪保存为 PNG
+│   ├─ [Picture 图片]
+│   │   └─ extract_picture()
+│   │       ├─ 裁剪 bbox 区域
+│   │       ├─ 保存为 tmp/{doc_id}/img/{page}_{idx}.png
+│   │       └─ content 存储图片相对路径
 │   │
-│   └─ [Table] ← 最复杂，详见表格提取流程
-│       ├─ 跨页表格检测
-│       ├─ force_ocr → extract_table_from_scanned()
-│       └─ 否则 → extract_table_from_native()
+│   └─ [Table 表格] ← 最复杂，详见 第四节
+│       ├─ 跨页表格检测 (详见第五节)
+│       ├─ force_ocr = true  → extract_table_from_scanned()
+│       └─ force_ocr = false → extract_table_from_native()
 │
 ├─ deduplicate_header_footer() → 页眉页脚去重
-│   ├─ 基于位置 IoU 和内容相似度
-│   └─ 保留内容更长的版本
+│   ├─ 基于位置 IoU 和内容相似度比较所有页面
+│   ├─ Page-header / Page-footer 重复内容去重
+│   └─ 保留内容更长、置信度更高的版本
 │
-└─ 批量写入数据库 create_element()
+└─ 批量写入 page_elements 数据库表
 ```
 
-### 阶段 5：完成 (95% - 100%)
+### 阶段 5：完成 (95% ~ 100%)
 
 ```
-更新文档状态为 completed
+更新 pdf_documents 状态为 completed
     │
     ▼
-清除进度缓存
+清除内存中的进度缓存
     │
     ▼
-前端轮询 /api/status 检测到完成
+前端轮询 /api/status 检测到 status = completed
     │
     ▼
-用户可查看、编辑、导出结果
+用户可:
+  - 查看解析结果
+  - 人工编辑校正
+  - 翻译内容
+  - 导出 (HTML / Markdown / PDF)
 ```
+
+---
 
 ## 四、表格提取详细流程
 
 ### 4.1 原生 PDF 表格提取 (extract_table_from_native)
 
 ```
-坐标转换：JPG 像素 → PDF 点坐标 (× 72/200)
+坐标转换: JPG 像素坐标 → PDF 点坐标
+    │   公式: pdf_coord = jpg_coord × (72 / DEFAULT_DPI)
     │
     ▼
-扩大检测区域（避免边界截断）：
-    左右 +3pt，顶部 +3pt，底部 +20pt
+扩大检测区域 (避免边界截断):
+    │   左右各 +3pt，顶部 +3pt，底部 +20pt
     │
     ▼
-_find_valid_table() 多级策略检测：
-    ├─ Strategy 1: "lines" - 宽松线条检测
-    ├─ Strategy 2: "lines_strict" - 严格线条检测
-    └─ Strategy 3: "text" - 基于文本排列检测
+_find_valid_table() → 多级策略检测
     │
-    ├─ 每级策略检测后验证：
-    │   ├─ 行数 ≥ 3，列数 ≥ 2
-    │   ├─ 非空单元格 ≥ 30%
-    │   └─ 包含数字或行数 ≥ 5
+    ├─ Strategy 1: "lines" (宽松线条检测)
+    │   └─ table = page.find_tables(strategy="lines")
     │
-    └─ 返回第一个有效表格
+    ├─ Strategy 2: "lines_strict" (严格线条检测)
+    │   └─ table = page.find_tables(strategy="lines_strict")
     │
-    ▼
-_table_to_html() → 生成带 rowspan/colspan 的 HTML：
-    ├─ 构建 covered 矩阵标记已输出单元格
-    ├─ 遍历 rows[row].cells[col]
-    ├─ 右侧连续 None → colspan
-    ├─ 下侧连续 None → rowspan
-    ├─ 检测表头行（通过 table.header 或第一行）
-    └─ HTML 特殊字符转义
+    └─ Strategy 3: "text" (基于文本排列检测)
+        └─ table = page.find_tables(strategy="text")
+    │
+    ├─ 每级策略检测后验证有效性:
+    │   ├─ 行数 ≥ 3 且 列数 ≥ 2
+    │   ├─ 非空单元格比例 ≥ 30%
+    │   └─ 包含数字 或 行数 ≥ 5
+    │
+    └─ 返回第一个有效表格，全部失败返回 None
     │
     ▼
-生成 Markdown（fallback）→ table.to_markdown()
+_table_to_html() → 生成带 rowspan/colspan 的 HTML
+    │
+    ├─ 构建 covered 矩阵 (row × col)，标记已输出单元格
+    │
+    ├─ 遍历 rows[row].cells[col]:
+    │   ├─ 检查右侧连续 None → colspan = n
+    │   ├─ 检查下侧连续 None → rowspan = m
+    │   ├─ 标记 covered[row:row+m, col:col+n]
+    │   └─ 生成 <td rowspan="m" colspan="n"> 内容 </td>
+    │
+    ├─ 检测表头行:
+    │   ├─ 使用 table.header 属性
+    │   └─ 若无 header，默认第一行为表头 <th>
+    │
+    └─ HTML 特殊字符转义 (&, <, >, ", ')
+    │
+    ▼
+同时生成 Markdown (fallback)
+    └─ content_format = "markdown"
 ```
 
 ### 4.2 扫描件表格提取 (extract_table_from_scanned)
 
 ```
-调用 llama.cpp 服务器，提示词 "Table Recognition:"
+调用 llama.cpp 服务器
+    │   Prompt: "Table Recognition: Please recognize this table..."
     │
     ▼
-VL 模型输出结构化标签格式：
-    <fcel>项目<fcel>2017年<nl>
-    <fcel>收入<fcel>100万<nl>
-    <ucel><fcel>支出<fcel>50万<nl>
+VL 模型输出结构化标签格式示例:
+    │   <fcel>项目名称<fcel>2017年<fcel>2018年<nl>
+    │   <fcel>收入<fcel>100万元<fcel>150万元<nl>
+    │   <ucel><fcel>支出<fcel>50万元<fcel>80万元<nl>
+    │
+    │   标签说明:
+    │     <fcel>  - 单元格开始
+    │     <ucel>  - 跨行合并标记 (该单元格继承上方内容)
+    │     <nl>    - 换行
     │
     ▼
-_parse_fcel_structured_to_html() → 解析标签：
-    ├─ <nl> → 行分隔
-    ├─ <fcel> → 单元格开始
-    ├─ <ucel> → 跨行合并标记
-    ├─ 检测表格行组（连续 ≥2 行表格行）
-    ├─ 计算 rowspan（检测跨行标记）
-    └─ 生成 HTML table
+_parse_fcel_structured_to_html() → 解析标签生成 HTML
+    │
+    ├─ 按 <nl> 分割行
+    │
+    ├─ 按 <fcel> 分割单元格
+    │
+    ├─ 检测跨行合并:
+    │   ├─ <ucel> 出现在行首
+    │   ├─ 计算连续跨行的 rowspan
+    │   └─ 更新之前行对应单元格的 rowspan 属性
+    │
+    ├─ 检测表格行组 (连续 ≥2 行的表格行)
+    │
+    └─ 生成 HTML table 结构
     │
     ▼
-同时生成 Markdown 版本（fallback）
+同时生成 Markdown 版本 (fallback)
 ```
+
+---
 
 ## 五、跨页表格检测与合并流程
 
 ```
-解析前一页时记录 last_table_info:
-    ├─ col_count - 列数
-    ├─ last_row - 最后一行内容
-    ├─ cross_page_group - 跨页组 ID
-    └─ at_page_bottom - 是否在页面底部
+解析当前页时，维护 last_table_info:
+    ├─ page_number: 来源页码
+    ├─ col_count: 列数
+    ├─ last_row_content: 最后一行内容
+    ├─ cross_page_group: 跨页组 ID (NULL = 非跨页)
+    └─ at_page_bottom: 表格是否在页面底部 70% 区域
     │
     ▼
-解析当前页第一个表格时：
-    ├─ 检查是否在页面顶部 30%
-    ├─ 检查前一表格是否在页面底部 70%
-    ├─ 检查列数是否匹配（相差 ≤1）
-    ├─ 检查当前页表格前是否有正文内容
-    └─ 检查内容特征（数字行、空单元格）
+解析下一页第一个 Table 元素时:
     │
-    ├─ 匹配成功 → force_no_header=True（不识别表头）
-    │   ├─ 继承 cross_page_group 或新建
+    ├─ 检查是否在页面顶部 30% 区域
+    ├─ 检查前一页表格是否在页面底部 70% 区域
+    ├─ 检查列数是否匹配 (相差 ≤ 1)
+    ├─ 检查当前表格前是否有正文内容
+    └─ 检查内容特征 (数字行、空单元格模式)
+    │
+    ├─ 匹配成功 → 判定为跨页表格:
+    │   ├─ force_no_header = True (当前页表格不识别表头)
+    │   ├─ 继承 cross_page_group，若为 NULL 则新建
     │   └─ 回溯更新前一表格的 cross_page_group
     │
-    └─ 导出时合并：
-        export_document_html() [routes.py:377]
-        └─ _merge_cross_page_tables()
-            ├─ 按 cross_page_group 分组
-            ├─ 提取所有 <tr> 行
-            └─ 合并到第一个表格中
+    └─ 匹配失败 → 独立表格，cross_page_group = NULL
+    │
+    ▼
+导出时合并 (_merge_cross_page_tables):
+    ├─ 按 cross_page_group 分组所有页面的表格
+    ├─ 提取每组所有 <tr> 行 (跳过重复表头)
+    └─ 合并到第一个表格中，移除后续表格
 ```
+
+---
 
 ## 六、OCR 服务调用流程 (ocr_service_vl.py)
 
 ```
-ocr_region(image_path, bbox)
+ocr_region(image_path, bbox, prompt="OCR:")
     │
     ▼
-_crop_and_save_image() → 裁剪 bbox 区域为临时 PNG
+_crop_and_save_image()
+    ├─ 按 bbox 裁剪图片区域
+    └─ 保存为临时 PNG 文件
     │
     ▼
-_call_llama_server("OCR:", tmp_path)
-    ├─ 图片 base64 编码
-    ├─ 发送到 http://127.0.0.1:8080/v1/chat/completions
-    ├─ 请求体格式（OpenAI 兼容）：
+_call_llama_server(prompt, tmp_image_path)
+    │
+    ├─ 图片 base64 编码 (data:image/png;base64,...)
+    │
+    ├─ 发送 POST 请求到 LLAMA_SERVER_URL
+    │   默认: http://127.0.0.1:8080/v1/chat/completions
+    │
+    ├─ 请求体格式 (OpenAI 兼容):
     │   {
-    │     "model": "PaddleOCR-VL-1.6.Q4_K_M.gguf",
+    │     "model": "PaddleOCR-VL",
     │     "messages": [{
     │       "role": "user",
     │       "content": [
-    │         {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,..."}},
-    │         {"type": "text", "text": "OCR:"}
+    │         {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}},
+    │         {"type": "text", "text": prompt}
     │       ]
     │     }],
     │     "temperature": 0,
-    │     "max_tokens": 500
+    │     "max_tokens": 500,
+    │     "stream": false
     │   }
+    │
     └─ 超时 180 秒
     │
     ▼
-_parse_fcel_to_text() → 解析 <fcel> 标签为纯文本
+解析返回结果:
+    ├─ result["choices"][0]["message"]["content"]
+    └─ _parse_fcel_to_text() → 去除 <fcel> 等标签，返回纯文本
     │
     ▼
-删除临时文件
+删除临时 PNG 文件
     │
     ▼
 返回识别文本
 ```
 
-## 七、人工校正与导出流程
+> 💡 **批量优化**: `ocr_batch()` 一次收集多个区域，串行发送请求（避免并发导致 llama.cpp OOM）。
 
-### 7.1 元素编辑
+---
+
+## 七、翻译流程
+
+```
+用户点击翻译 (元素 / 页面 / 文档)
+    │
+    ▼
+获取活跃 LLM 配置
+    └─ llm_config_service.get_active_config()
+    │
+    ▼
+翻译单元素 translate_element():
+    │
+    ├─ 收集待翻译文本:
+    │   ├─ Picture 类型 → 先调用 describe_image_element() 生成图片描述
+    │   └─ 其他类型 → content 字段
+    │
+    ├─ translate_text(text, target_language) [llm_service.py]
+    │   └─ 调用 LLM API (OpenAI 兼容格式)
+    │
+    └─ 保存结果: update_element(translated_content=...)
+    │
+    ▼
+翻译单页 / 整文档 translate_page() / translate_document():
+    │
+    ├─ 获取页面/文档所有元素
+    │
+    ├─ translate_page_content(elements, target_language)
+    │   │
+    │   ├─ 将元素内容分段 (每段 ≤ 1000 字符)
+    │   │
+    │   ├─ 构造批量翻译 Prompt:
+    │   │   请将以下文本翻译成 {target_language}。
+    │   │   文本用 [N] 标记，按编号返回结果。
+    │   │   [0] 第一段文本...
+    │   │   [1] 第二段文本...
+    │   │
+    │   ├─ 调用 LLM API
+    │   │
+    │   └─ _parse_translated_result()
+    │       └─ 解析 [N] 标记，匹配原文与译文
+    │
+    └─ 批量保存 translated_content
+```
+
+---
+
+## 八、人工校正与导出流程
+
+### 8.1 元素编辑
 
 ```
 PUT /api/elements/{element_id}
-    ├─ 更新 content
-    ├─ 更新 element_type
-    └─ 更新 reading_order
+    │
+    ├─ 更新 content (识别内容)
+    ├─ 更新 translated_content (译文)
+    ├─ 更新 element_type (元素类型)
+    └─ 更新 reading_order (阅读顺序)
 ```
 
-### 7.2 阅读顺序重排
+### 8.2 阅读顺序重排
 
 ```
 PUT /api/pages/{page_id}/elements/reorder
-    └─ 按提供的 element_order 列表批量更新 reading_order
+    │
+    └─ 接收 element_order 列表 (按阅读顺序排列的 element_id)
+    └─ 批量更新每个元素的 reading_order
 ```
 
-### 7.3 添加新元素
+### 8.3 Surya 重新排序
+
+```
+PUT /api/pages/{page_id}/surya-reorder
+    │
+    └─ 对该页重新调用 Surya Order 模型排序
+    └─ 更新所有元素的 reading_order
+```
+
+### 8.4 添加新元素
 
 ```
 POST /api/pages/{page_id}/elements
-    ├─ 前端框选 bbox
-    ├─ 选择 element_type
-    ├─ 输入 content
-    └─ 自动分配 reading_order（追加到末尾）
+    │
+    ├─ 前端框选 bbox (在图片上拖拽)
+    ├─ 用户选择 element_type
+    ├─ 用户输入 content
+    └─ reading_order 自动追加到末尾
 ```
 
-### 7.4 导出 HTML
+### 8.5 导出流程
 
 ```
 GET /api/documents/{doc_id}/export/html
-    ├─ 合并跨页表格
-    ├─ 按 reading_order 排序元素
-    ├─ 按元素类型转换为 HTML 标签：
-    │   ├─ Title → <h1 style="color: #dc143c;">
-    │   ├─ Section-header → <h2>
-    │   ├─ Table → 直接输出 HTML table
-    │   ├─ Picture → <img>
-    │   ├─ Formula → <div class="formula">
-    │   └─ Text → <p>
-    └─ 添加 CSS 样式，返回 attachment 下载
+    │
+    ├─ get_parse_results() → 获取所有页面和元素
+    │
+    ├─ _merge_cross_page_tables() → 合并跨页表格
+    │
+    ├─ 按页面遍历:
+    │   └─ 按 reading_order 排序元素
+    │   └─ element_to_html() 按类型转换:
+    │       ├─ Title          → <h1 style="color: #dc143c;">
+    │       ├─ Section-header → <h2>
+    │       ├─ Table          → 直接输出内容 (已为 HTML)
+    │       ├─ Picture        → <img src="file://...">
+    │       ├─ Formula        → <div class="formula">
+    │       ├─ List-item      → <li>
+    │       └─ 其他文本类型   → <p>
+    │
+    ├─ build_html_document() → 添加 CSS 样式
+    │
+    └─ 返回 Response，Content-Disposition: attachment
 ```
 
-## 八、数据库表结构关系
+**译文导出流程相同**，只需在 element_to_html() 和 generate_page_markdown() 中设置 `use_translated=True`，优先使用 translated_content 字段。
+
+---
+
+## 九、数据库表结构与关系
 
 ```
 pdf_documents (文档表)
-    │  id (PK)
-    │  filename, original_filename, file_path, file_size
-    │  page_count, status, error_message
-    │  created_at, updated_at
     │
-    ├─ has many → pdf_pages
-    │      │  id (PK)
-    │      │  document_id (FK)
-    │      │  page_number, width, height
-    │      │  jpg_width, jpg_height, is_scanned
-    │      │  jpg_path, single_pdf_path
-    │      │  status, error_message
-    │      │
-    │      └─ has many → page_elements
-    │             id (PK)
-    │             page_id (FK)
-    │             element_type (11 种类型)
-    │             bbox_x0, bbox_y0, bbox_x1, bbox_y1
-    │             confidence, reading_order
-    │             content, content_format
-    │             cross_page_group (跨页表格组 ID)
-    │             created_at
+    │  字段:
+    │  ├─ id                    INTEGER PRIMARY KEY
+    │  ├─ filename              TEXT      (系统生成的唯一文件名)
+    │  ├─ original_filename     TEXT      (用户上传的原始文件名)
+    │  ├─ file_path             TEXT      (PDF 存储路径)
+    │  ├─ file_size             INTEGER   (字节)
+    │  ├─ page_count            INTEGER
+    │  ├─ status                TEXT      (uploaded/processing/completed/failed)
+    │  ├─ error_message         TEXT
+    │  ├─ created_at            TIMESTAMP
+    │  └─ updated_at            TIMESTAMP
+    │
+    └── has many → pdf_pages (通过 document_id 外键关联)
+
+pdf_pages (页面表)
+    │
+    │  字段:
+    │  ├─ id                    INTEGER PRIMARY KEY
+    │  ├─ document_id           INTEGER   (FK → pdf_documents.id)
+    │  ├─ page_number           INTEGER
+    │  ├─ width                 REAL      (PDF 点坐标宽度)
+    │  ├─ height                REAL      (PDF 点坐标高度)
+    │  ├─ jpg_width             INTEGER   (渲染图片像素宽度)
+    │  ├─ jpg_height            INTEGER   (渲染图片像素高度)
+    │  ├─ jpg_path              TEXT      (渲染 JPG 路径)
+    │  ├─ single_pdf_path       TEXT      (单页 PDF 路径)
+    │  ├─ is_scanned            BOOLEAN   (是否为扫描件)
+    │  ├─ is_ordered            BOOLEAN   (阅读顺序是否已排序)
+    │  ├─ status                TEXT
+    │  └─ error_message         TEXT
+    │
+    └── has many → page_elements (通过 page_id 外键关联)
+
+page_elements (文档元素表)
+    │
+    │  字段:
+    │  ├─ id                    INTEGER PRIMARY KEY
+    │  ├─ page_id               INTEGER   (FK → pdf_pages.id)
+    │  ├─ element_type          TEXT      (11种类型)
+    │  ├─ bbox_x0 / bbox_y0     REAL      (JPG像素坐标)
+    │  ├─ bbox_x1 / bbox_y1     REAL
+    │  ├─ confidence            REAL      (0.0~1.0)
+    │  ├─ reading_order         INTEGER   (阅读顺序，从0开始)
+    │  ├─ content               TEXT      (识别内容)
+    │  ├─ content_format        TEXT      (html/markdown/text)
+    │  ├─ translated_content    TEXT      (译文内容)
+    │  ├─ cross_page_group      TEXT      (跨页表格组ID，NULL为非跨页)
+    │  └─ created_at            TIMESTAMP
 ```
 
-## 关键配置点
+---
 
-| 配置项 | 默认值 | 说明 |
-|--------|--------|------|
-| `YOLO_DEVICE` | `"cpu"` | YOLO 推理设备，设为 `"cuda"` 启用 GPU |
-| `YOLO_IMG_SIZE` | `1280` | YOLO 推理图片尺寸，越大越精确但越慢 |
-| `SCAN_TEXT_THRESHOLD` | `10` | 扫描件检测文本字符数阈值 |
-| `SCAN_IMAGE_AREA_RATIO` | `0.8` | 扫描件图片占页面比例阈值 |
-| `GARBLE_CJK_THRESHOLD` | `0.3` | 中文乱码比例阈值 |
-| `LLAMA_SERVER_URL` | `"http://127.0.0.1:8080"` | llama.cpp OCR 服务器地址 |
-| `DEFAULT_DPI` | `200` | PDF 转图片的 DPI |
+## 十、关键配置项
+
+| 配置项 | 默认值 | 说明 | 位置 |
+|--------|--------|------|------|
+| `YOLO_MODEL_REPO` | `"Armaggheddon/yolo26-document-layout"` | YOLO 模型 HuggingFace 仓库 | config.py |
+| `YOLO_MODEL_FILE` | `"yolo26m_doc_layout.pt"` | YOLO 模型文件名 | config.py |
+| `YOLO_IMG_SIZE` | `1280` | YOLO 推理图片尺寸 (px) | config.py |
+| `YOLO_DEVICE` | `"cuda"` | YOLO 推理设备: cuda / cpu | config.py |
+| `SURYA_ORDER_MODEL_REPO` | `"vikp/surya_order"` | Surya 模型仓库 | config.py |
+| `SURYA_ORDER_DEVICE` | `"cuda"` | Surya 推理设备 | config.py |
+| `DEFAULT_DPI` | `200` | PDF 转图片分辨率 | pdf_service.py |
+| `SCAN_TEXT_THRESHOLD` | `10` | 扫描件检测: 文本字符数阈值 | config.py |
+| `SCAN_IMAGE_AREA_RATIO` | `0.8` | 扫描件检测: 单张图片占页面面积比 | config.py |
+| `GARBLE_CJK_THRESHOLD` | `0.3` | 中文乱码比例阈值 | parse_service.py |
+| `TABLE_STRATEGY` | `"lines_strict"` | 原生表格检测默认策略 | config.py |
+| `HF_MIRROR_URL` | `"https://hf-mirror.com"` | HuggingFace 国内镜像 | config.py |
+| `LLAMA_SERVER_URL` | `"http://127.0.0.1:8080"` | llama.cpp OCR 服务地址 | ocr_service_vl.py |
+| `TMP_DIR` | `./tmp` | 临时文件目录 | config.py |
+| `MODELS_DIR` | `./models` | AI 模型文件目录 | config.py |
+| `DB_PATH` | `./data.db` | SQLite 数据库路径 | config.py |

@@ -1,0 +1,505 @@
+{
+  "page_info": {
+    "page_number": 60,
+    "orientation": "portrait",
+    "language": "zh-CN"
+  },
+  "elements": [
+    {
+      "type": "page_header",
+      "content": "贵州高速公路集团有限公司 2017 年度第一期中期票据（专项扶贫）募集说明书",
+      "order": 1
+    },
+    {
+      "type": "paragraph",
+      "content": "营业务毛利润稳定增长，得益于公路运营板块所得毛利润的稳定增长。",
+      "order": 2
+    },
+    {
+      "type": "paragraph",
+      "content": "发行人2014-2016年及2017年1-6月主营业务毛利率结构如下表：",
+      "order": 3
+    },
+    {
+      "type": "heading",
+      "content": "表 5-9：发行人 2014-2016 年及 2017 年 1-6 月主营业务毛利率结构",
+      "level": 3,
+      "order": 4
+    },
+    {
+      "type": "table",
+      "content": "表 5-9 数据",
+      "order": 5,
+      "cells": [
+        [
+          {
+            "content": "项 目",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": true
+          },
+          {
+            "content": "2017 年 3 月",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": true
+          },
+          {
+            "content": "2016 年",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": true
+          },
+          {
+            "content": "2015 年",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": true
+          },
+          {
+            "content": "2014 年",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": true
+          }
+        ],
+        [
+          {
+            "content": "公路运营毛利率",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          },
+          {
+            "content": "83.06",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          },
+          {
+            "content": "80.56",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          },
+          {
+            "content": "39.28",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          },
+          {
+            "content": "47.38",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          }
+        ],
+        [
+          {
+            "content": "销售商品毛利率",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          },
+          {
+            "content": "9.97",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          },
+          {
+            "content": "8.41",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          },
+          {
+            "content": "15.14",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          },
+          {
+            "content": "6.32",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          }
+        ],
+        [
+          {
+            "content": "其他毛利率",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          },
+          {
+            "content": "58.93",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          },
+          {
+            "content": "41.35",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          },
+          {
+            "content": "52.99",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          },
+          {
+            "content": "-128.36",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          }
+        ],
+        [
+          {
+            "content": "合计",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          },
+          {
+            "content": "61.44",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          },
+          {
+            "content": "61.53",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          },
+          {
+            "content": "36.52",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          },
+          {
+            "content": "33.36",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          }
+        ]
+      ]
+    },
+    {
+      "type": "paragraph",
+      "content": "2014-2016年及2017年1-6月，发行人主营业务毛利率分别为33.36%、36.52%、61.53%和61.44%，同期发行人公路运营板块的毛利率分别为47.38%、39.28%、80.56%和83.06%，由于从2016年起，政府性高速公路不再计提折旧，故发行人高速公路运营成本大大降低，使得利润率大幅上升，销售商品板块的毛利率分别为6.32%、15.14%、8.41%和9.97%。",
+      "order": 6
+    },
+    {
+      "type": "heading",
+      "content": "（四）公路运营板块状况",
+      "level": 3,
+      "order": 7
+    },
+    {
+      "type": "list",
+      "content": "1、公路建设模式",
+      "order": 8
+    },
+    {
+      "type": "paragraph",
+      "content": "发行人以公路建设、运营、管理为主业。公司运营的公路、在建公路均通过社会公开招标方式选择施工单位建设，自己不负责项目施工建设。",
+      "order": 9
+    },
+    {
+      "type": "list",
+      "content": "2、公路资产情况",
+      "order": 10
+    },
+    {
+      "type": "heading",
+      "content": "表 5-10：发行人 2017 年 3 月末主要公路资产统计表",
+      "level": 3,
+      "order": 11
+    },
+    {
+      "type": "table",
+      "content": "表 5-10 数据",
+      "order": 12,
+      "cells": [
+        [
+          {
+            "content": "所属干线",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": true
+          },
+          {
+            "content": "公路名称",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": true
+          },
+          {
+            "content": "公路起止",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": true
+          },
+          {
+            "content": "路产属性",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": true
+          },
+          {
+            "content": "收费年限",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": true
+          },
+          {
+            "content": "通车里程",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": true
+          },
+          {
+            "content": "收费里程",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": true
+          }
+        ],
+        [
+          {
+            "content": "G75 兰海高速",
+            "row_span": 5,
+            "col_span": 1,
+            "is_header": false
+          },
+          {
+            "content": "崇遵公路",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          },
+          {
+            "content": "起自桐梓县松坎镇，止于红花岗区中庄镇",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          },
+          {
+            "content": "收费还贷",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          },
+          {
+            "content": "2005-2035",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          },
+          {
+            "content": "117.88",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          },
+          {
+            "content": "118.17",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          }
+        ],
+        [
+          {
+            "content": "",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          },
+          {
+            "content": "贵遵公路（不含扎南）",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          },
+          {
+            "content": "起自贵阳市老客车站，止于红花岗区中庄镇",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          },
+          {
+            "content": "收费还贷",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          },
+          {
+            "content": "2007-2035",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          },
+          {
+            "content": "51.59",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          },
+          {
+            "content": "44.96",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          }
+        ],
+        [
+          {
+            "content": "",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          },
+          {
+            "content": "扎南公路",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          },
+          {
+            "content": "起自贵阳市扎佐，止于遵义县南白镇",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          },
+          {
+            "content": "收费还贷",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          },
+          {
+            "content": "2007-2035",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          },
+          {
+            "content": "84.50",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          },
+          {
+            "content": "84.37",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          }
+        ],
+        [
+          {
+            "content": "",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          },
+          {
+            "content": "贵阳东北绕城公路",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          },
+          {
+            "content": "起自笋子林，止于尖坡",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          },
+          {
+            "content": "收费还贷",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          },
+          {
+            "content": "1998-2024",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          },
+          {
+            "content": "20.50",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          },
+          {
+            "content": "20.50",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          }
+        ],
+        [
+          {
+            "content": "",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          },
+          {
+            "content": "贵新公路",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          },
+          {
+            "content": "起自小碧乡下坝，止于独山县麻尾镇",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          },
+          {
+            "content": "收费还贷",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          },
+          {
+            "content": "2000-2021",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          },
+          {
+            "content": "136.03",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          },
+          {
+            "content": "142.03",
+            "row_span": 1,
+            "col_span": 1,
+            "is_header": false
+          }
+        ]
+      ]
+    },
+    {
+      "type": "page_footer",
+      "content": "60",
+      "order": 13
+    }
+  ]
+}
