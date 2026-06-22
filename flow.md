@@ -272,10 +272,38 @@ assign_reading_order_batch() [order_service.py]
 │   ├─ Page-header / Page-footer 重复内容去重
 │   └─ 保留内容更长、置信度更高的版本
 │
+├─ mark_header_footer() → 页眉页脚区域标记
+│   ├─ 识别页眉类型元素 (page-header, header)，记录最大 y1 作为 header_y_threshold
+│   ├─ 识别页脚类型元素 (page-footer, footer, footnote)，记录最小 y0 作为 footer_y_threshold
+│   ├─ 将阈值保存到 pdf_pages 表 (header_y_threshold, footer_y_threshold)
+│   └─ 标记位于阈值范围内的其他元素:
+│       ├─ 左上角 y0 < header_y_threshold → header_footer_mark = "header"
+│       └─ 右下角 y1 > footer_y_threshold → header_footer_mark = "footer"
+│
 └─ 批量写入 page_elements 数据库表
 ```
 
-### 阶段 5：完成 (95% ~ 100%)
+### 阶段 5：图片描述批量生成 (96%)
+
+```
+所有页面解析完成后，批量执行图片描述:
+    │
+    ▼
+_describe_images_for_document(doc_id)
+    │
+    ├─ 遍历所有页面的 Picture/Figure 元素
+    │   ├─ 跳过已有 image_description 的元素
+    │   ├─ 跳过 header_footer_mark = "header" 或 "footer" 的元素
+    │   └─ 跳过图片文件不存在的元素
+    │
+    ├─ 对每个需要描述的图片:
+    │   ├─ 调用 describe_image_silent() → Vision LLM 生成描述
+    │   └─ 保存 image_description 到 page_elements 表
+    │
+    └─ 日志记录描述完成数量
+```
+
+### 阶段 6：完成 (97% ~ 100%)
 
 ```
 更新 pdf_documents 状态为 completed
@@ -487,7 +515,7 @@ _call_llama_server(prompt, tmp_image_path)
 翻译单元素 translate_element():
     │
     ├─ 收集待翻译文本:
-    │   ├─ Picture 类型 → 先调用 describe_image_element() 生成图片描述
+    │   ├─ Picture 类型 → 若已有 image_description 则使用；否则提示先生成图片描述
     │   └─ 其他类型 → content 字段
     │
     ├─ translate_text(text, target_language) [llm_service.py]
@@ -562,7 +590,65 @@ POST /api/pages/{page_id}/elements
     └─ reading_order 自动追加到末尾
 ```
 
-### 8.5 导出流程
+### 8.5 导出功能总览
+
+#### 导出 API 端点列表
+
+```
+整文档导出:
+  GET /api/documents/{doc_id}/export/html                      → 原文 HTML
+  GET /api/documents/{doc_id}/export/markdown                  → 原文 Markdown
+  GET /api/documents/{doc_id}/export/html-zip                  → 每页 HTML ZIP
+  GET /api/documents/{doc_id}/export/translated/html           → 译文 HTML
+  GET /api/documents/{doc_id}/export/translated/markdown       → 译文 Markdown
+  GET /api/documents/{doc_id}/export/translated/html-zip       → 译文每页 HTML ZIP
+  GET /api/documents/{doc_id}/export/rag-html                  → RAG 友好格式（单HTML，已去页眉页脚）
+  GET /api/documents/{doc_id}/export/rag-html-zip              → RAG 友好分页格式（ZIP，每页单独HTML）
+
+单页导出:
+  GET /api/pages/{page_id}/export/html                         → 单页原文 HTML
+  GET /api/pages/{page_id}/export/markdown                     → 单页原文 Markdown
+  GET /api/pages/{page_id}/export/translated/html              → 单页译文 HTML
+  GET /api/pages/{page_id}/export/translated/markdown          → 单页译文 Markdown
+  GET /api/pages/{page_id}/export/rag-html                     → 单页 RAG 友好格式
+  GET /api/pages/{page_id}/pdf                                 → 单页原 PDF 文件
+  GET {jpg_path}                                               → 单页原 PDF 渲染图片
+```
+
+#### 前端导出菜单结构
+
+**列表页 & 详情页右上角（整文档导出）:**
+```
+导出
+├── 原文
+│   ├── 整本 HTML
+│   ├── 整本 Markdown
+│   └── 每页 HTML ZIP
+├── 译文
+│   ├── 译文 HTML
+│   ├── 译文 Markdown
+│   └── 译文每页 HTML ZIP
+└── RAG 友好
+    ├── RAG 友好格式（单HTML，已去页眉页脚）
+    └── RAG 友好分页格式（ZIP，每页单独HTML）
+```
+
+**详情页单页导出:**
+```
+导出
+├── 原文
+│   ├── 原文 HTML
+│   ├── 原文 Markdown
+│   ├── 原文 PDF
+│   └── 原文 PDF 图片
+├── 译文
+│   ├── 译文 HTML
+│   └── 译文 Markdown
+└── RAG 友好
+    └── RAG 单页友好格式
+```
+
+### 8.6 通用导出流程
 
 ```
 GET /api/documents/{doc_id}/export/html
@@ -577,7 +663,7 @@ GET /api/documents/{doc_id}/export/html
     │       ├─ Title          → <h1 style="color: #dc143c;">
     │       ├─ Section-header → <h2>
     │       ├─ Table          → 直接输出内容 (已为 HTML)
-    │       ├─ Picture        → <img src="file://...">
+    │       ├─ Picture        → <img> (有 image_description 时用 figure-container 包裹并显示 caption)
     │       ├─ Formula        → <div class="formula">
     │       ├─ List-item      → <li>
     │       └─ 其他文本类型   → <p>
@@ -587,7 +673,42 @@ GET /api/documents/{doc_id}/export/html
     └─ 返回 Response，Content-Disposition: attachment
 ```
 
-**译文导出流程相同**，只需在 element_to_html() 和 generate_page_markdown() 中设置 `use_translated=True`，优先使用 translated_content 字段。
+**译文导出流程相同**，只需在 element_to_html() 和 generate_page_markdown() 中设置 `use_translated=True`，优先使用 translated_content 字段。图片元素的 caption 在译文模式下优先使用 translated_content（即图片描述的译文）。
+
+### 8.7 RAG 友好格式导出
+
+```
+前端点击 "RAG 友好格式" 或 "RAG 友好分页格式" 菜单项:
+    │
+    ├─ RAG 友好格式 (GET /api/documents/{doc_id}/export/rag-html):
+    │   │
+    │   ├─ generate_rag_single_html()
+    │   │   ├─ 遍历所有页面
+    │   │   ├─ _filter_rag_elements() → 排除 header_footer_mark=header/footer 及 Page-header/Page-footer 元素
+    │   │   └─ 按 generate_document_html 方式合并为单个 HTML
+    │   │
+    │   └─ 文件名: {原文件名}_RAG友好.html
+    │
+    └─ RAG 友好分页格式 (GET /api/documents/{doc_id}/export/rag-html-zip):
+        │
+        ├─ generate_rag_per_page_zip()
+        │   ├─ 遍历所有页面
+        │   ├─ _filter_rag_elements() → 排除页眉页脚相关元素
+        │   ├─ 每页单独生成 HTML (generate_page_html)，文件名 page_001.html / page_002.html ...
+        │   └─ 所有 HTML 打包为 ZIP 返回
+        │
+        └─ 文件名: {原文件名}_RAG友好_按页.zip
+```
+
+**RAG 友好格式特性**:
+- 自动移除所有页眉页脚（包括 Page-header / Page-footer 类型元素和被 `header_footer_mark` 标记的元素）
+- 保留图片描述作为 caption（同普通导出）
+- 保留跨页表格合并逻辑
+- 支持整文档导出和单页导出
+
+**单页 RAG 友好格式**:
+- 端点: `GET /api/pages/{page_id}/export/rag-html`
+- 逻辑: `generate_rag_single_page_html()` → 过滤页眉页脚元素后调用 `generate_page_html()`
 
 ---
 
@@ -624,6 +745,8 @@ pdf_pages (页面表)
     │  ├─ single_pdf_path       TEXT      (单页 PDF 路径)
     │  ├─ is_scanned            BOOLEAN   (是否为扫描件)
     │  ├─ is_ordered            BOOLEAN   (阅读顺序是否已排序)
+    │  ├─ header_y_threshold    REAL      (页眉区域 y 阈值，低于此值为页眉区)
+    │  ├─ footer_y_threshold    REAL      (页脚区域 y 阈值，高于此值为页脚区)
     │  ├─ status                TEXT
     │  └─ error_message         TEXT
     │
@@ -641,7 +764,9 @@ page_elements (文档元素表)
     │  ├─ reading_order         INTEGER   (阅读顺序，从0开始)
     │  ├─ content               TEXT      (识别内容)
     │  ├─ content_format        TEXT      (html/markdown/text)
+    │  ├─ image_description     TEXT      (图片描述，Vision LLM 生成)
     │  ├─ translated_content    TEXT      (译文内容)
+    │  ├─ header_footer_mark    TEXT      (页眉页脚标记: "header" / "footer" / NULL)
     │  ├─ cross_page_group      TEXT      (跨页表格组ID，NULL为非跨页)
     │  └─ created_at            TIMESTAMP
 ```

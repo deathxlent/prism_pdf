@@ -90,16 +90,22 @@
                     </div>
                     <div class="btn-group" id="detail-export-group">
                         <button class="btn btn-success" onclick="toggleDetailExportDropdown(event)" id="export-html-btn">
-                            <i class="fas fa-file-export"></i> 导出HTML
+                            <i class="fas fa-file-export"></i> 导出
                             <i class="fas fa-chevron-down"></i>
                         </button>
                         <div class="export-dropdown" id="detail-export-dropdown">
+                            <div class="dropdown-section-title">原文</div>
                             <button class="dropdown-item" onclick="exportDocumentHtml()">
-                                <i class="fas fa-file-code"></i> 原文 HTML
+                                <i class="fas fa-file-code"></i> 整本 HTML
+                            </button>
+                            <button class="dropdown-item" onclick="exportDocumentMarkdown()">
+                                <i class="fas fa-file-alt"></i> 整本 Markdown
                             </button>
                             <button class="dropdown-item" onclick="exportDocumentHtmlZip()">
-                                <i class="fas fa-file-archive"></i> 原文 HTML ZIP
+                                <i class="fas fa-file-archive"></i> 每页 HTML ZIP
                             </button>
+                            <div class="dropdown-divider"></div>
+                            <div class="dropdown-section-title">译文</div>
                             <button class="dropdown-item" onclick="exportDocumentTranslatedHtml()">
                                 <i class="fas fa-file-code"></i> 译文 HTML
                             </button>
@@ -107,7 +113,15 @@
                                 <i class="fas fa-file-alt"></i> 译文 Markdown
                             </button>
                             <button class="dropdown-item" onclick="exportDocumentTranslatedHtmlZip()">
-                                <i class="fas fa-file-archive"></i> 译文 HTML ZIP
+                                <i class="fas fa-file-archive"></i> 译文每页 HTML ZIP
+                            </button>
+                            <div class="dropdown-divider"></div>
+                            <div class="dropdown-section-title">RAG 友好</div>
+                            <button class="dropdown-item" onclick="exportDocumentRagHtml()">
+                                <i class="fas fa-magic"></i> RAG 友好格式
+                            </button>
+                            <button class="dropdown-item" onclick="exportDocumentRagHtmlZip()">
+                                <i class="fas fa-file-archive"></i> RAG 友好分页格式
                             </button>
                         </div>
                     </div>
@@ -149,6 +163,7 @@
                                     <i class="fas fa-chevron-down"></i>
                                 </button>
                                 <div class="export-dropdown export-dropdown-right" id="page-export-dropdown">
+                                    <div class="dropdown-section-title">原文</div>
                                     <button class="dropdown-item" onclick="exportCurrentPageHtml()">
                                         <i class="fas fa-file-code"></i> 原文 HTML
                                     </button>
@@ -158,12 +173,21 @@
                                     <button class="dropdown-item" onclick="exportCurrentPagePdf()">
                                         <i class="fas fa-file-pdf"></i> 原文 PDF
                                     </button>
+                                    <button class="dropdown-item" onclick="exportCurrentPageImage()">
+                                        <i class="fas fa-image"></i> 原文 PDF 图片
+                                    </button>
                                     <div class="dropdown-divider"></div>
+                                    <div class="dropdown-section-title">译文</div>
                                     <button class="dropdown-item" onclick="exportCurrentPageTranslatedHtml()">
                                         <i class="fas fa-file-code"></i> 译文 HTML
                                     </button>
                                     <button class="dropdown-item" onclick="exportCurrentPageTranslatedMarkdown()">
                                         <i class="fas fa-file-alt"></i> 译文 Markdown
+                                    </button>
+                                    <div class="dropdown-divider"></div>
+                                    <div class="dropdown-section-title">RAG 友好</div>
+                                    <button class="dropdown-item" onclick="exportCurrentPageRagHtml()">
+                                        <i class="fas fa-magic"></i> RAG 单页友好格式
                                     </button>
                                 </div>
                             </div>
@@ -413,11 +437,11 @@
                     <select id="llm-config-type" class="form-control" onchange="onLlmConfigTypeChange()">
                     </select>
                 </div>
-                <div class="form-group">
-                    <label>Base URL</label>
+                <div class="form-group" id="llm-config-base-url-group">
+                    <label>服务地址 (Base URL)</label>
                     <input type="text" id="llm-config-base-url" class="form-control" placeholder="https://api.example.com/v1">
                 </div>
-                <div class="form-group">
+                <div class="form-group" id="llm-config-api-key-group">
                     <label>API Key</label>
                     <div class="input-with-toggle">
                         <input type="password" id="llm-config-api-key" class="form-control" placeholder="sk-...">
@@ -426,21 +450,21 @@
                         </button>
                     </div>
                 </div>
-                <div class="form-group">
+                <div class="form-group" id="llm-config-model-group">
                     <label>模型名称</label>
                     <input type="text" id="llm-config-model" class="form-control" placeholder="gpt-4o">
                 </div>
-                <div class="form-row">
+                <div class="form-row" id="llm-config-temperature-group">
                     <div class="form-group half">
                         <label>Temperature</label>
                         <input type="number" id="llm-config-temperature" class="form-control" step="0.1" min="0" max="2" value="0.7">
                     </div>
-                    <div class="form-group half">
+                    <div class="form-group half" id="llm-config-max-tokens-group">
                         <label>Max Tokens</label>
                         <input type="number" id="llm-config-max-tokens" class="form-control" min="1" value="4096">
                     </div>
                 </div>
-                <div class="form-group">
+                <div class="form-group" id="llm-config-supports-vision-group">
                     <label class="checkbox-label">
                         <input type="checkbox" id="llm-config-supports-vision">
                         <span>支持图生文 (Vision) 功能</span>

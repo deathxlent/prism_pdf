@@ -1,8 +1,7 @@
 #!/bin/bash
 # ============================================================
-# Prism PDF - llama.cpp OCR Service (macOS Apple Silicon)
-# Starts PaddleOCR-VL multimodal OCR service using Metal acceleration
-# Only supports M1/M2/M3/M4 series
+# Prism PDF - llama.cpp LLM Service (Linux)
+# Starts local LLM for translation and image description
 # ============================================================
 
 set -e
@@ -15,20 +14,8 @@ NC='\033[0m'
 
 echo ""
 echo -e "${CYAN}============================================${NC}"
-echo -e "${CYAN}  Prism PDF - llama.cpp OCR Service (macOS)${NC}"
+echo -e "${CYAN}  Prism PDF - llama.cpp LLM Service (Linux)${NC}"
 echo -e "${CYAN}============================================${NC}"
-echo ""
-
-# ============================================================
-# Check Apple Silicon
-# ============================================================
-ARCH=$(uname -m)
-if [ "$ARCH" != "arm64" ]; then
-    echo -e "${RED}[ERROR] This script only supports Apple Silicon (M-series)${NC}"
-    echo "Current architecture: $ARCH"
-    exit 1
-fi
-echo -e "${GREEN}[OK] Apple Silicon detected ($ARCH)${NC}"
 echo ""
 
 # ============================================================
@@ -36,26 +23,23 @@ echo ""
 # ============================================================
 
 # llama.cpp installation directory
-LLAMACPP_DIR="$HOME/llamacpp"
+LLAMACPP_DIR="/opt/llamacpp"
 
-# Model file paths
-MODEL_FILE="$LLAMACPP_DIR/models/PaddleOCR-VL-1.6.Q4_K_M.gguf"
-MMPROJ_FILE="$LLAMACPP_DIR/models/PaddleOCR-VL-1.6-GGUF-mmproj.gguf"
+# Model file path (Qwen3.5-4B)
+MODEL_FILE="$LLAMACPP_DIR/models/Qwen3.5-4B-Claude-4.6-Opus-Reasoning-Distilled-Q4_K_M.gguf"
 
 # Service configuration
 HOST="127.0.0.1"
-PORT="8080"
+PORT="8081"
 
-# GPU layers: 99=all GPU layers (Metal), 0=CPU only
-# On Apple Silicon, Metal acceleration is always recommended
+# GPU layers: 99=all GPU, 0=CPU only
 NGL="99"
 
-# CPU threads (recommended: performance core count)
-# M1=4-8, M2 Pro/Max=8-12, M3 Max=12-16
-THREADS=$(sysctl -n hw.perflevel0.logicalcpu 2>/dev/null || echo 8)
+# CPU threads (recommended: physical core count)
+THREADS=$(nproc 2>/dev/null || echo 8)
 
 # Context length
-CTX_LEN="4096"
+CTX_LEN="8192"
 
 # Batch size
 BATCH_SIZE="512"
@@ -75,7 +59,7 @@ if [ ! -f "$LLAMACPP_DIR/llama-server" ]; then
     echo "Download llama.cpp from:"
     echo "  https://github.com/ggml-org/llama.cpp/releases"
     echo ""
-    echo "macOS package: llama-*-bin-macos-arm64.zip"
+    echo "Linux package: llama-*-bin-ubuntu-x64.zip or compile from source"
     exit 1
 fi
 
@@ -83,25 +67,15 @@ if [ ! -f "$MODEL_FILE" ]; then
     echo ""
     echo -e "${RED}[ERROR] Model file not found: $MODEL_FILE${NC}"
     echo ""
-    echo "Download from:"
-    echo "  https://hf-mirror.com/PaddlePaddle/PaddleOCR-VL-1.6-GGUF"
+    echo "Please run download_qwen_model.sh to download the model"
+    echo "Or download manually from:"
+    echo "  https://hf-mirror.com/Jackrong/Qwen3.5-4B-Claude-4.6-Opus-Reasoning-Distilled-v2-GGUF"
     echo ""
-    echo "Two files required:"
-    echo "  1. PaddleOCR-VL-1.6.Q4_K_M.gguf (LLM backbone, ~286MB)"
-    echo "  2. PaddleOCR-VL-1.6-GGUF-mmproj.gguf (Vision encoder, ~841MB)"
+    echo "Recommended: Q4_K_M quantization version (~2.7 GB)"
     echo ""
     echo "Download command:"
     echo "  export HF_ENDPOINT=https://hf-mirror.com"
-    echo "  huggingface-cli download PaddlePaddle/PaddleOCR-VL-1.6-GGUF --local-dir $LLAMACPP_DIR/models"
-    exit 1
-fi
-
-if [ ! -f "$MMPROJ_FILE" ]; then
-    echo ""
-    echo -e "${RED}[ERROR] Vision encoder file not found: $MMPROJ_FILE${NC}"
-    echo ""
-    echo "Download from:"
-    echo "  https://hf-mirror.com/PaddlePaddle/PaddleOCR-VL-1.6-GGUF"
+    echo "  huggingface-cli download Jackrong/Qwen3.5-4B-Claude-4.6-Opus-Reasoning-Distilled-v2-GGUF --local-dir $LLAMACPP_DIR/models"
     exit 1
 fi
 
@@ -109,19 +83,30 @@ echo -e "${GREEN}[OK] All file paths valid${NC}"
 echo ""
 
 # ============================================================
-# Check Apple Silicon Unified Memory
+# Detect GPU availability
 # ============================================================
 
-echo -e "${YELLOW}[Check] System memory info...${NC}"
-TOTAL_MEM=$(sysctl -n hw.memsize 2>/dev/null | awk '{print $1/1024/1024/1024}')
-echo "      Total memory: ${TOTAL_MEM}GB"
-echo "      Performance cores: $THREADS"
-echo "      Metal acceleration: enabled (ngl=$NGL)"
+echo -e "${YELLOW}[Check] GPU status...${NC}"
+if command -v nvidia-smi &> /dev/null; then
+    echo -e "${GREEN}[OK] NVIDIA GPU detected${NC}"
+    nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits 2>/dev/null | while read line; do
+        echo "      $line"
+    done
+    echo "      GPU layers: $NGL"
+else
+    echo -e "${YELLOW}[WARN] No NVIDIA GPU detected, forcing CPU mode${NC}"
+    NGL="0"
+fi
 echo ""
 
-echo -e "${YELLOW}[NOTE] Apple Silicon uses Unified Memory.${NC}"
-echo -e "${YELLOW}      PaddleOCR-VL requires ~1.2GB memory (Q4 quantization).${NC}"
-echo -e "${YELLOW}      If memory is insufficient, OCR may crash or run very slowly.${NC}"
+# ============================================================
+# Set CPU optimization environment variables
+# ============================================================
+
+if [ "$NGL" = "0" ]; then
+    echo -e "${CYAN}[INFO] CPU mode: Setting OMP_NUM_THREADS=$THREADS${NC}"
+    export OMP_NUM_THREADS=$THREADS
+fi
 echo ""
 
 # ============================================================
@@ -132,9 +117,9 @@ echo -e "${CYAN}============================================${NC}"
 echo -e "${CYAN}  Startup Configuration${NC}"
 echo -e "${CYAN}============================================${NC}"
 echo "  Service URL:    http://$HOST:$PORT"
+echo "  API URL:        http://$HOST:$PORT/v1"
 echo "  Model file:     $MODEL_FILE"
-echo "  Vision encoder: $MMPROJ_FILE"
-echo "  GPU layers:     $NGL (Metal)"
+echo "  GPU layers:     $NGL"
 echo "  CPU threads:    $THREADS"
 echo "  Context length: $CTX_LEN"
 echo -e "${CYAN}============================================${NC}"
@@ -152,7 +137,6 @@ cd "$LLAMACPP_DIR"
 
 "$LLAMACPP_DIR/llama-server" \
   -m "$MODEL_FILE" \
-  --mmproj "$MMPROJ_FILE" \
   --host "$HOST" \
   --port "$PORT" \
   -ngl "$NGL" \

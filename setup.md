@@ -7,8 +7,9 @@
 3. [Linux 平台配置](#3-linux-平台配置)
 4. [macOS Apple Silicon 平台配置](#4-macos-apple-silicon-平台配置)
 5. [llama.cpp OCR 服务配置（扫描件必需）](#5-llamacpp-ocr-服务配置扫描件必需)
-6. [启动脚本说明](#6-启动脚本说明)
-7. [常见问题排查](#7-常见问题排查)
+6. [本地 LLM 翻译服务配置（推荐）](#6-本地-llm-翻译服务配置推荐)
+7. [启动脚本说明](#7-启动脚本说明)
+8. [常见问题排查](#8-常见问题排查)
 
 ---
 
@@ -591,17 +592,168 @@ export GGML_METAL_MALLOC_LIMIT=0
 
 ---
 
-## 6. 启动脚本说明
+## 6. 本地 LLM 翻译服务配置（推荐）
 
-### 6.1 脚本一览
+如果需要完全本地运行翻译功能（不依赖第三方 API），可以配置本地 LLM 服务。
 
-| 平台 | 安装脚本 | 一键启动脚本 | OCR 服务启动脚本 |
-|------|---------|-------------|-----------------|
-| **Windows** | `setup.ps1` | `start_all.bat` | `start_llama_server.bat` |
-| **Linux** | `setup.sh` | `start_all.sh` | `start_llama_server.sh` |
-| **macOS M系列** | `setup_mac.sh` | `start_all_mac.sh` | `start_llama_server_mac.sh` |
+**推荐模型**：`Qwen3.5-4B-Claude-4.6-Opus-Reasoning-Distilled-v2-GGUF`
 
-### 6.2 配置启动参数
+这是一款基于 Qwen3.5-4B 的蒸馏模型，由 Claude 4.6 Opus 推理能力蒸馏而来，非常适合本地部署的翻译和文档处理任务。4B 参数量级在普通消费级显卡上即可流畅运行。
+
+| 量化级别 | 文件大小 | 显存占用 | 翻译质量 | 推荐场景 |
+|---------|---------|---------|---------|---------|
+| **Q4_K_M** | ~2.7 GB | ~3.5 GB | ⭐⭐⭐⭐ | **推荐，性价比最高**，4GB 显存即可 |
+| Q5_K_M | ~3.3 GB | ~4.2 GB | ⭐⭐⭐⭐ | 追求精度，6GB 显存 |
+| Q6_K | ~3.9 GB | ~4.8 GB | ⭐⭐⭐⭐⭐ | 最高精度，8GB 显存 |
+
+### 6.1 Windows 平台配置
+
+#### 6.1.1 一键下载模型（推荐）
+
+直接运行项目根目录下的下载脚本：
+
+```powershell
+# 方式一：Batch 脚本
+.\download_qwen_model.bat
+
+# 方式二：PowerShell 脚本
+.\download_qwen_model.ps1
+```
+
+脚本会自动：
+- 检查 Python 和 huggingface_hub 环境
+- 使用国内镜像下载模型
+- 下载到 `G:\llamacpp\models\` 目录
+
+#### 6.1.2 手动下载模型
+
+如果脚本下载失败，可以手动下载：
+
+1. 访问镜像站：https://hf-mirror.com/Jackrong/Qwen3.5-4B-Claude-4.6-Opus-Reasoning-Distilled-v2-GGUF
+
+2. 下载 `Qwen3.5-4B-Claude-4.6-Opus-Reasoning-Distilled-Q4_K_M.gguf`
+
+3. 放到 `G:\llamacpp\models\` 目录
+
+最终目录结构：
+```
+G:\llamacpp\
+├── llama-server.exe
+└── models\
+    ├── PaddleOCR-VL-1.6.Q4_K_M.gguf          (OCR 模型，可选)
+    ├── PaddleOCR-VL-1.6-GGUF-mmproj.gguf     (OCR 模型，可选)
+    └── Qwen3.5-4B-Claude-4.6-Opus-Reasoning-Distilled-Q4_K_M.gguf
+```
+
+#### 6.1.3 启动 LLM 服务
+
+运行项目根目录下的启动脚本：
+
+```
+start_llm_llama_server.bat
+```
+
+看到 `HTTP server listening` 表示启动成功。
+
+服务默认地址：`http://127.0.0.1:8081/v1`
+
+> 💡 如需修改端口或模型路径，编辑 `start_llm_llama_server.bat` 中的配置。
+
+### 6.2 Linux 平台配置
+
+#### 6.2.1 下载模型
+
+```bash
+# 方式一：使用项目脚本
+cd /path/to/prism-pdf
+bash download_qwen_model.sh
+
+# 方式二：手动使用 huggingface-cli
+export HF_ENDPOINT=https://hf-mirror.com
+huggingface-cli download Jackrong/Qwen3.5-4B-Claude-4.6-Opus-Reasoning-Distilled-v2-GGUF \
+  Qwen3.5-4B-Claude-4.6-Opus-Reasoning-Distilled-Q4_K_M.gguf \
+  --local-dir /opt/llamacpp/models
+```
+
+#### 6.2.2 启动 LLM 服务
+
+```bash
+# 使用项目脚本
+bash start_llm_llama_server.sh
+
+# 或手动启动
+cd /opt/llamacpp
+./llama-server \
+  -m models/Qwen3.5-4B-Claude-4.6-Opus-Reasoning-Distilled-Q4_K_M.gguf \
+  --host 127.0.0.1 \
+  --port 8081 \
+  -ngl 99 \
+  -c 8192 \
+  -b 512 \
+  -t 8
+```
+
+### 6.3 macOS Apple Silicon 平台配置
+
+#### 6.3.1 下载模型
+
+```bash
+# 方式一：使用项目脚本
+cd /path/to/prism-pdf
+bash download_qwen_model.sh
+
+# 方式二：使用 huggingface-cli
+export HF_ENDPOINT=https://hf-mirror.com
+huggingface-cli download Jackrong/Qwen3.5-4B-Claude-4.6-Opus-Reasoning-Distilled-v2-GGUF \
+  Qwen3.5-4B-Claude-4.6-Opus-Reasoning-Distilled-Q4_K_M.gguf \
+  --local-dir ~/llama.cpp/models
+```
+
+#### 6.3.2 启动 LLM 服务
+
+```bash
+# 使用项目脚本
+bash start_llm_llama_server_mac.sh
+
+# 或使用 Homebrew 安装的 llama.cpp
+llama-server \
+  -m ~/llama.cpp/models/Qwen3.5-4B-Claude-4.6-Opus-Reasoning-Distilled-Q4_K_M.gguf \
+  --host 127.0.0.1 \
+  --port 8081 \
+  -ngl 99 \
+  -c 8192
+```
+
+> ✨ **Apple Silicon 优势**：
+> - Unified Memory 架构，4GB 显存等价于共享内存，模型加载轻松
+> - M1 及以上芯片均可流畅运行 4B 模型
+> - 功耗低，适合长时间批量翻译
+
+### 6.4 Web 界面配置
+
+启动 LLM 服务后，在 Web 界面的 **"LLM 配置"** 面板中添加配置：
+
+1. 点击"添加配置"
+2. 类型选择：`LlamaCPP` 或 `OpenAI 兼容`
+3. 配置名称：`本地 Qwen3.5-4B`（自定义）
+4. Base URL：`http://127.0.0.1:8081/v1`
+5. API Key：留空（本地服务不需要）
+6. 模型名称：`qwen3.5-4b`（或任意名称，llama.cpp 不校验）
+7. 保存并设为激活
+
+---
+
+## 7. 启动脚本说明
+
+### 7.1 脚本一览
+
+| 平台 | 安装脚本 | 一键启动脚本 | OCR 服务启动脚本 | LLM 服务启动脚本 | 模型下载脚本 |
+|------|---------|-------------|-----------------|-----------------|-------------|
+| **Windows** | `setup.ps1` | `start_all.bat` | `start_llama_server.bat` | `start_llm_llama_server.bat` | `download_qwen_model.bat` / `.ps1` |
+| **Linux** | `setup.sh` | `start_all.sh` | `start_llama_server.sh` | `start_llm_llama_server.sh` | `download_qwen_model.sh` |
+| **macOS M系列** | `setup_mac.sh` | `start_all_mac.sh` | `start_llama_server_mac.sh` | `start_llm_llama_server_mac.sh` | `download_qwen_model.sh` |
+
+### 7.2 配置启动参数
 
 #### Windows
 
@@ -693,7 +845,7 @@ NGL="99"
 THREADS=$(sysctl -n hw.physicalcpu 2>/dev/null || echo 8)
 ```
 
-### 6.3 快速启动步骤
+### 7.3 快速启动步骤
 
 #### 日常使用
 
@@ -713,7 +865,11 @@ THREADS=$(sysctl -n hw.physicalcpu 2>/dev/null || echo 8)
 cd "g:\ws\Prism PDF"
 start_llama_server.bat
 
-# 终端 2：启动主服务
+# 终端 2：启动 LLM 翻译服务（如需本地翻译）
+cd "g:\ws\Prism PDF"
+start_llm_llama_server.bat
+
+# 终端 3：启动主服务
 cd "g:\ws\Prism PDF"
 venv\Scripts\activate
 python -m backend.main
@@ -724,7 +880,10 @@ python -m backend.main
 # 终端 1：启动 OCR 服务（如需）
 ./start_llama_server.sh
 
-# 终端 2：启动主服务
+# 终端 2：启动 LLM 翻译服务（如需本地翻译）
+./start_llm_llama_server.sh
+
+# 终端 3：启动主服务
 source venv/bin/activate
 python -m backend.main
 ```
@@ -734,7 +893,10 @@ python -m backend.main
 # 终端 1：启动 OCR 服务（如需）
 ./start_llama_server_mac.sh
 
-# 终端 2：启动主服务
+# 终端 2：启动 LLM 翻译服务（如需本地翻译）
+./start_llm_llama_server_mac.sh
+
+# 终端 3：启动主服务
 source venv/bin/activate
 python -m backend.main
 ```
@@ -743,7 +905,7 @@ python -m backend.main
 
 首次启动会自动下载 AI 模型（YOLO + Surya），请耐心等待。
 
-### 6.4 验证服务
+### 7.4 验证服务
 
 1. 打开浏览器访问 http://localhost:8000
 2. 上传一个 PDF 文件测试
@@ -751,9 +913,9 @@ python -m backend.main
 
 ---
 
-## 7. 常见问题排查
+## 8. 常见问题排查
 
-### 7.1 依赖安装问题
+### 8.1 依赖安装问题
 
 **Q: `pip install` 时提示 torch 安装失败**
 
@@ -785,7 +947,7 @@ A: 确保在项目根目录下运行，且使用 `python -m backend.main` 方式
 
 ---
 
-### 7.2 CUDA / GPU 问题 (Windows/Linux)
+### 8.2 CUDA / GPU 问题 (Windows/Linux)
 
 **Q: 运行时提示 `CUDA out of memory`**
 
@@ -812,7 +974,7 @@ python -c "import torch; print(torch.cuda.is_available())"
 
 ---
 
-### 7.3 MPS 问题 (macOS Apple Silicon)
+### 8.3 MPS 问题 (macOS Apple Silicon)
 
 **Q: MPS 不可用**
 
@@ -832,7 +994,7 @@ YOLO_DEVICE = "cpu"
 
 ---
 
-### 7.4 OCR 服务问题
+### 8.4 OCR 服务问题
 
 **Q: llama-server 启动后输出为空或卡住**
 
@@ -870,7 +1032,7 @@ ss -tlnp | grep 8080
 
 ---
 
-### 7.5 模型下载问题
+### 8.5 模型下载问题
 
 **Q: HuggingFace 下载超时或速度慢**
 
@@ -898,7 +1060,7 @@ https://hf-mirror.com/Armaggheddon/yolo26-document-layout/resolve/main/yolo26m_d
 
 ---
 
-### 7.6 PDF 解析问题
+### 8.6 PDF 解析问题
 
 **Q: 扫描件 PDF 内容为空**
 
@@ -928,8 +1090,10 @@ A: 系统会自动检测乱码并触发 OCR。如果仍有乱码：
 | 服务 | 端口 | 说明 |
 |------|------|------|
 | 主服务 (FastAPI) | 8000 | Web 界面和 API |
-| llama.cpp OCR 服务 | 8080 | OpenAI 兼容 API |
+| llama.cpp OCR 服务 | 8080 | OpenAI 兼容 API，扫描件 OCR |
+| llama.cpp LLM 服务 | 8081 | OpenAI 兼容 API，本地翻译/推理 |
 
 如需修改端口：
 - 主服务：修改 `backend/main.py` 中的 `uvicorn.run` 参数
 - OCR 服务：修改对应启动脚本中的 `--port` 参数和 `backend/services/ocr_service_vl.py` 中的 `LLAMA_SERVER_URL`
+- LLM 服务：修改对应启动脚本中的 `--port` 参数，在 Web 界面"LLM 配置"中更新 Base URL

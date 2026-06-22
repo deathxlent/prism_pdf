@@ -4,7 +4,7 @@ import logging
 import re
 import urllib.request
 from pathlib import Path
-from backend.services.llm_config_service import get_active_config
+from backend.services.llm_config_service import get_active_config, get_active_paddlevl_config
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +21,8 @@ def _get_active_llm() -> dict | None:
     cfg = get_active_config()
     if not cfg:
         return None
-    if not cfg.get("api_key") and not cfg.get("base_url"):
+    has_llm = bool(cfg.get("api_key") or cfg.get("base_url"))
+    if not has_llm:
         return None
     return cfg
 
@@ -31,6 +32,108 @@ def _build_url(base_url: str) -> str:
     if not base_url.endswith("/v1"):
         return f"{base_url}/v1/chat/completions"
     return f"{base_url}/chat/completions"
+
+
+def _call_paddlevl(prompt: str, image_path: str, max_tokens: int = 2048, timeout: int | None = None) -> str:
+    paddlevl_cfg = get_active_paddlevl_config()
+    if not paddlevl_cfg:
+        raise ValueError("未配置 PaddleVL 服务地址")
+
+    paddlevl_url = (paddlevl_cfg.get("base_url") or "").strip().rstrip("/")
+    if not paddlevl_url:
+        raise ValueError("未配置 PaddleVL 地址")
+
+    api_url = _build_url(paddlevl_url)
+    api_key = (paddlevl_cfg.get("api_key") or "").strip()
+
+    image_b64 = _encode_image_file(image_path)
+    mime = Path(image_path).suffix.lower()
+    if mime in (".jpg", ".jpeg"):
+        mime_type = "image/jpeg"
+    elif mime == ".png":
+        mime_type = "image/png"
+    else:
+        mime_type = "image/jpeg"
+
+    payload = {
+        "model": paddlevl_cfg.get("model", "paddlevl"),
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{mime_type};base64,{image_b64}"},
+                    },
+                ],
+            }
+        ],
+        "max_tokens": int(max_tokens),
+        "temperature": float(paddlevl_cfg.get("temperature", 0.7)),
+    }
+
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    req = urllib.request.Request(
+        api_url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+
+    use_timeout = timeout if timeout is not None else VISION_TIMEOUT
+
+    try:
+        with urllib.request.urlopen(req, timeout=use_timeout) as resp:
+            raw = resp.read().decode("utf-8")
+            result = json.loads(raw)
+    except urllib.error.HTTPError as e:
+        err_body = ""
+        try:
+            err_body = e.read().decode("utf-8", errors="ignore")
+        except Exception:
+            pass
+        logger.error(f"PaddleVL HTTPError {e.code}: {err_body[:500]}")
+        raise ValueError(f"PaddleVL 请求失败: HTTP {e.code} - {err_body[:500]}") from e
+    except urllib.error.URLError as e:
+        logger.error(f"PaddleVL URLError: {e}")
+        raise ValueError(f"PaddleVL 连接失败: {e}") from e
+    except TimeoutError as e:
+        logger.error(f"PaddleVL 超时: {e}")
+        raise ValueError(f"PaddleVL 请求超时: {e}") from e
+    except Exception as e:
+        logger.exception(f"PaddleVL 调用异常: {e}")
+        raise
+
+    if not isinstance(result, dict):
+        raise ValueError(f"PaddleVL 返回格式异常: {type(result)}")
+
+    if "error" in result:
+        err = result["error"]
+        if isinstance(err, dict):
+            raise ValueError(f"PaddleVL 返回错误: {err.get('message') or json.dumps(err, ensure_ascii=False)[:300]}")
+        raise ValueError(f"PaddleVL 返回错误: {err}")
+
+    choices = result.get("choices", [])
+    raw_response = raw
+
+    for _ in range(3):
+        if not choices:
+            break
+        for choice in choices:
+            msg = choice.get("message", {})
+            content = _extract_content_from_response(msg)
+            if content and content.strip():
+                return content.strip()
+
+        logger.error(f"PaddleVL 所有尝试都返回空内容。完整响应: {raw_response[:1500]}")
+        raise ValueError("PaddleVL 返回的内容为空，请检查模型是否正常工作")
+
+    logger.error(f"PaddleVL 返回异常: {json.dumps(result, ensure_ascii=False)[:500]}")
+    raise ValueError(f"PaddleVL 返回异常格式: {list(result.keys())}")
 
 
 def _extract_content_from_response(message: dict) -> str:
@@ -286,8 +389,13 @@ def _call_llm_vision(text_prompt: str, image_path: str, max_tokens: int = 1024) 
 
 
 def is_vision_available() -> bool:
+    paddlevl_cfg = get_active_paddlevl_config()
+    if paddlevl_cfg and paddlevl_cfg.get("base_url", "").strip():
+        return True
     cfg = _get_active_llm()
-    return bool(cfg and cfg.get("supports_vision"))
+    if cfg and cfg.get("supports_vision"):
+        return True
+    return False
 
 
 def describe_image(image_path: str) -> str:
@@ -305,6 +413,18 @@ def describe_image(image_path: str) -> str:
         "- 描述要尽可能详细准确\n"
         "- 最终答案要完整清晰"
     )
+
+    paddlevl_cfg = get_active_paddlevl_config()
+    if paddlevl_cfg and paddlevl_cfg.get("base_url", "").strip():
+        try:
+            return _call_paddlevl(prompt, image_path, max_tokens=2048)
+        except Exception as e:
+            logger.warning(f"PaddleVL 调用失败，回退到 LLM Vision: {e}")
+            cfg = _get_active_llm()
+            if cfg and cfg.get("supports_vision"):
+                return _call_llm_vision(prompt, image_path, max_tokens=2048)
+            raise
+
     return _call_llm_vision(prompt, image_path, max_tokens=2048)
 
 

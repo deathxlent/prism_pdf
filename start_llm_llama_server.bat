@@ -1,14 +1,14 @@
 @echo off
 REM ============================================================
-REM Prism PDF - llama.cpp OCR Service Start Script
-REM Starts PaddleOCR-VL multimodal OCR service
+REM Prism PDF - llama.cpp LLM Service Start Script
+REM Starts local LLM for translation and image description
 REM ============================================================
 
 setlocal enabledelayedexpansion
 
 echo.
 echo ============================================
-echo   Prism PDF - llama.cpp OCR Service
+echo   Prism PDF - llama.cpp LLM Service
 echo ============================================
 echo.
 
@@ -19,13 +19,12 @@ REM ============================================================
 REM llama.cpp installation directory
 set "LLAMACPP_DIR=G:\llamacpp"
 
-REM Model file paths
-set "MODEL_FILE=%LLAMACPP_DIR%\models\PaddleOCR-VL-1.6.Q4_K_M.gguf"
-set "MMPROJ_FILE=%LLAMACPP_DIR%\models\PaddleOCR-VL-1.6-GGUF-mmproj.gguf"
+REM Model file path (Qwen3.5-4B)
+set "MODEL_FILE=%LLAMACPP_DIR%\models\Qwen3.5-4B-Claude-4.6-Opus-Reasoning-Distilled-Q4_K_M.gguf"
 
 REM Service configuration
 set "HOST=127.0.0.1"
-set "PORT=8080"
+set "PORT=8081"
 
 REM GPU layers: 99=all GPU, 0=CPU only
 set "NGL=99"
@@ -34,7 +33,7 @@ REM CPU threads (recommended: physical core count)
 set "THREADS=8"
 
 REM Context length
-set "CTX_LEN=4096"
+set "CTX_LEN=8192"
 
 REM Batch size
 set "BATCH_SIZE=512"
@@ -62,23 +61,11 @@ if not exist "%MODEL_FILE%" (
     echo.
     echo [ERROR] Model file not found: %MODEL_FILE%
     echo.
-    echo Download from:
-    echo   https://hf-mirror.com/PaddlePaddle/PaddleOCR-VL-1.6-GGUF
+    echo Please run download_qwen_model.bat to download the model
+    echo Or download manually from:
+    echo   https://hf-mirror.com/Jackrong/Qwen3.5-4B-Claude-4.6-Opus-Reasoning-Distilled-v2-GGUF
     echo.
-    echo Two files required:
-    echo   1. PaddleOCR-VL-1.6.Q4_K_M.gguf (LLM backbone, ~286MB)
-    echo   2. PaddleOCR-VL-1.6-GGUF-mmproj.gguf (Vision encoder, ~841MB)
-    echo.
-    pause
-    exit /b 1
-)
-
-if not exist "%MMPROJ_FILE%" (
-    echo.
-    echo [ERROR] Vision encoder file not found: %MMPROJ_FILE%
-    echo.
-    echo Download from:
-    echo   https://hf-mirror.com/PaddlePaddle/PaddleOCR-VL-1.6-GGUF
+    echo Recommended: Q4_K_M quantization version (~2.7 GB)
     echo.
     pause
     exit /b 1
@@ -123,8 +110,8 @@ echo ============================================
 echo   Startup Configuration
 echo ============================================
 echo   Service URL:    http://%HOST%:%PORT%
+echo   API URL:        http://%HOST%:%PORT%/v1
 echo   Model file:     %MODEL_FILE%
-echo   Vision encoder: %MMPROJ_FILE%
 echo   GPU layers:     %NGL%
 echo   CPU threads:    %THREADS%
 echo   Context length: %CTX_LEN%
@@ -143,7 +130,6 @@ cd /d "%LLAMACPP_DIR%"
 
 "%LLAMACPP_DIR%\llama-server.exe" ^
   -m "%MODEL_FILE%" ^
-  --mmproj "%MMPROJ_FILE%" ^
   --host %HOST% ^
   --port %PORT% ^
   -ngl %NGL% ^

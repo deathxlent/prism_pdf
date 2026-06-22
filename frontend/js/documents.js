@@ -149,18 +149,38 @@ function renderDocumentsList(docs) {
                             ${doc.status === 'completed' ? 
                                 `<div class="btn-group" onclick="event.stopPropagation();">
                                     <button class="btn btn-secondary btn-sm" onclick="toggleExportDropdown(${doc.id}, event)">
-                                        <i class="fas fa-file-export"></i> 导出译文
+                                        <i class="fas fa-file-export"></i> 导出
                                         <i class="fas fa-chevron-down"></i>
                                     </button>
                                     <div class="export-dropdown" id="export-dropdown-${doc.id}">
+                                        <div class="dropdown-section-title">原文</div>
+                                        <button class="dropdown-item" onclick="exportDocumentHtml(${doc.id})">
+                                            <i class="fas fa-file-code"></i> 整本 HTML
+                                        </button>
+                                        <button class="dropdown-item" onclick="exportDocumentMarkdown(${doc.id})">
+                                            <i class="fas fa-file-alt"></i> 整本 Markdown
+                                        </button>
+                                        <button class="dropdown-item" onclick="exportDocumentHtmlZip(${doc.id})">
+                                            <i class="fas fa-file-archive"></i> 每页 HTML ZIP
+                                        </button>
+                                        <div class="dropdown-divider"></div>
+                                        <div class="dropdown-section-title">译文</div>
                                         <button class="dropdown-item" onclick="exportDocumentTranslatedHtml(${doc.id})">
-                                            <i class="fas fa-file-code"></i> HTML
+                                            <i class="fas fa-file-code"></i> 译文 HTML
                                         </button>
                                         <button class="dropdown-item" onclick="exportDocumentTranslatedMarkdown(${doc.id})">
-                                            <i class="fas fa-file-alt"></i> Markdown
+                                            <i class="fas fa-file-alt"></i> 译文 Markdown
                                         </button>
                                         <button class="dropdown-item" onclick="exportDocumentTranslatedHtmlZip(${doc.id})">
-                                            <i class="fas fa-file-archive"></i> HTML ZIP
+                                            <i class="fas fa-file-archive"></i> 译文每页 HTML ZIP
+                                        </button>
+                                        <div class="dropdown-divider"></div>
+                                        <div class="dropdown-section-title">RAG 友好</div>
+                                        <button class="dropdown-item" onclick="exportDocumentRagHtml(${doc.id})">
+                                            <i class="fas fa-magic"></i> RAG 友好格式
+                                        </button>
+                                        <button class="dropdown-item" onclick="exportDocumentRagHtmlZip(${doc.id})">
+                                            <i class="fas fa-file-archive"></i> RAG 友好分页格式
                                         </button>
                                     </div>
                                 </div>` : ''}

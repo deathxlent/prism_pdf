@@ -17,17 +17,18 @@ function initExportDropdown() {
     });
 }
 
-async function exportDocumentHtml() {
-    if (!currentDocId) return;
+async function exportDocumentHtml(docId = null) {
+    const id = docId || currentDocId;
+    if (!id) return;
     
     try {
-        const res = await fetch(`${API}/api/documents/${currentDocId}/export/html`);
+        const res = await fetch(`${API}/api/documents/${id}/export/html`);
         if (!res.ok) throw new Error('Export failed');
         const blob = await res.blob();
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `document_${currentDocId}.html`;
+        a.download = `document_${id}.html`;
         a.click();
         URL.revokeObjectURL(url);
     } catch (e) {
@@ -35,17 +36,18 @@ async function exportDocumentHtml() {
     }
 }
 
-async function exportDocumentMarkdown() {
-    if (!currentDocId) return;
+async function exportDocumentMarkdown(docId = null) {
+    const id = docId || currentDocId;
+    if (!id) return;
     
     try {
-        const res = await fetch(`${API}/api/documents/${currentDocId}/export/markdown`);
+        const res = await fetch(`${API}/api/documents/${id}/export/markdown`);
         if (!res.ok) throw new Error('Export failed');
         const blob = await res.blob();
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `document_${currentDocId}.md`;
+        a.download = `document_${id}.md`;
         a.click();
         URL.revokeObjectURL(url);
     } catch (e) {
@@ -53,22 +55,35 @@ async function exportDocumentMarkdown() {
     }
 }
 
-async function exportDocumentHtmlZip() {
-    if (!currentDocId) return;
+async function exportDocumentHtmlZip(docId = null) {
+    const id = docId || currentDocId;
+    if (!id) return;
     
     try {
-        const res = await fetch(`${API}/api/documents/${currentDocId}/export/zip-html`);
+        const res = await fetch(`${API}/api/documents/${id}/export/html-zip`);
         if (!res.ok) throw new Error('Export failed');
         const blob = await res.blob();
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `document_${currentDocId}_html.zip`;
+        a.download = `document_${id}_pages_html.zip`;
         a.click();
         URL.revokeObjectURL(url);
     } catch (e) {
         alert('导出失败: ' + e.message);
     }
+}
+
+async function exportDocumentRagHtml(docId = null) {
+    const id = docId || currentDocId;
+    if (!id) return;
+    await exportRagHtml(id, false);
+}
+
+async function exportDocumentRagHtmlZip(docId = null) {
+    const id = docId || currentDocId;
+    if (!id) return;
+    await exportRagHtml(id, true);
 }
 
 async function exportCurrentPageHtml() {
@@ -121,6 +136,45 @@ async function exportCurrentPagePdf() {
         const a = document.createElement('a');
         a.href = url;
         a.download = `page_${currentPageData.page_number}.pdf`;
+        a.click();
+        URL.revokeObjectURL(url);
+    } catch (e) {
+        alert('导出失败: ' + e.message);
+    }
+}
+
+async function exportCurrentPageImage() {
+    if (!currentPageData || !currentPageData.jpg_path) {
+        alert('该页面没有图片文件');
+        return;
+    }
+    
+    try {
+        const res = await fetch(`${currentPageData.jpg_path}`);
+        if (!res.ok) throw new Error('Export failed');
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `page_${currentPageData.page_number}.jpg`;
+        a.click();
+        URL.revokeObjectURL(url);
+    } catch (e) {
+        alert('导出失败: ' + e.message);
+    }
+}
+
+async function exportCurrentPageRagHtml() {
+    if (!currentPageData) return;
+    
+    try {
+        const res = await fetch(`${API}/api/pages/${currentPageData.id}/export/rag-html`);
+        if (!res.ok) throw new Error('Export failed');
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `page_${currentPageData.page_number}_RAG友好.html`;
         a.click();
         URL.revokeObjectURL(url);
     } catch (e) {
@@ -214,6 +268,28 @@ async function exportCurrentPageTranslatedMarkdown() {
         const a = document.createElement('a');
         a.href = url;
         a.download = `page_${currentPageData.page_number}_译文.md`;
+        a.click();
+        URL.revokeObjectURL(url);
+    } catch (e) {
+        alert('导出失败: ' + e.message);
+    }
+}
+
+async function exportRagHtml(docId, keepPageNumbers) {
+    if (!docId) return;
+    try {
+        const endpoint = keepPageNumbers ? 'rag-html-zip' : 'rag-html';
+        const res = await fetch(`${API}/api/documents/${docId}/export/${endpoint}`);
+        if (!res.ok) throw new Error('Export failed');
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        if (keepPageNumbers) {
+            a.download = `document_${docId}_RAG友好_按页.zip`;
+        } else {
+            a.download = `document_${docId}_RAG友好.html`;
+        }
         a.click();
         URL.revokeObjectURL(url);
     } catch (e) {

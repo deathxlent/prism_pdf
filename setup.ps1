@@ -1,5 +1,5 @@
-# Prism PDF 一键安装脚本
-# 适用于 Windows PowerShell 5.0+
+# Prism PDF Setup Script
+# For Windows PowerShell 5.0+
 
 $ErrorActionPreference = "Stop"
 
@@ -8,19 +8,19 @@ Set-Location $ScriptDir
 
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan
-Write-Host "  Prism PDF 安装程序" -ForegroundColor Cyan
+Write-Host "  Prism PDF Setup" -ForegroundColor Cyan
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host ""
 
 # ============================================================
-# 1. 检查 Python 版本
+# 1. Check Python version
 # ============================================================
-Write-Host "[1/6] 检查 Python 环境..." -ForegroundColor Yellow
+Write-Host "[1/6] Checking Python environment..." -ForegroundColor Yellow
 
 try {
     $pythonVersion = python --version 2>&1
     if ($LASTEXITCODE -ne 0) {
-        throw "Python 未安装或未添加到 PATH"
+        throw "Python not found"
     }
     Write-Host "    $pythonVersion" -ForegroundColor Green
 
@@ -29,76 +29,76 @@ try {
     $minor = [int]$versionMatch.Groups[2].Value
 
     if ($major -ne 3 -or $minor -lt 10 -or $minor -gt 12) {
-        Write-Host "    ⚠️  警告: 推荐使用 Python 3.10 ~ 3.12" -ForegroundColor Yellow
-        Write-Host "    当前版本可能存在兼容性问题" -ForegroundColor Yellow
+        Write-Host "    WARNING: Python 3.10 ~ 3.12 is recommended" -ForegroundColor Yellow
+        Write-Host "    Current version may have compatibility issues" -ForegroundColor Yellow
     }
 }
 catch {
-    Write-Host "    ❌ 错误: 未找到 Python" -ForegroundColor Red
-    Write-Host "    请从 https://www.python.org/downloads/ 下载安装 Python 3.10+" -ForegroundColor Red
+    Write-Host "    ERROR: Python not found" -ForegroundColor Red
+    Write-Host "    Please download Python 3.10+ from https://www.python.org/downloads/" -ForegroundColor Red
     exit 1
 }
 
 # ============================================================
-# 2. 创建虚拟环境
+# 2. Create virtual environment
 # ============================================================
 Write-Host ""
-Write-Host "[2/6] 创建 Python 虚拟环境..." -ForegroundColor Yellow
+Write-Host "[2/6] Creating Python virtual environment..." -ForegroundColor Yellow
 
 $venvDir = Join-Path $ScriptDir "venv"
 if (Test-Path $venvDir) {
-    Write-Host "    虚拟环境已存在，跳过创建" -ForegroundColor Green
+    Write-Host "    Virtual environment already exists, skipping" -ForegroundColor Green
 }
 else {
-    Write-Host "    创建 venv/ 目录..."
+    Write-Host "    Creating venv/ directory..."
     python -m venv $venvDir
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "    ❌ 虚拟环境创建失败" -ForegroundColor Red
+        Write-Host "    ERROR: Failed to create virtual environment" -ForegroundColor Red
         exit 1
     }
-    Write-Host "    ✅ 虚拟环境创建成功" -ForegroundColor Green
+    Write-Host "    Virtual environment created successfully" -ForegroundColor Green
 }
 
 # ============================================================
-# 3. 激活虚拟环境并安装依赖
+# 3. Activate virtual environment and install dependencies
 # ============================================================
 Write-Host ""
-Write-Host "[3/6] 安装 Python 依赖包..." -ForegroundColor Yellow
+Write-Host "[3/6] Installing Python dependencies..." -ForegroundColor Yellow
 
 $venvPython = Join-Path $venvDir "Scripts\python.exe"
 $venvPip = Join-Path $venvDir "Scripts\pip.exe"
 
 if (-not (Test-Path $venvPython)) {
-    Write-Host "    ❌ 虚拟环境 Python 不存在" -ForegroundColor Red
+    Write-Host "    ERROR: Virtual environment Python not found" -ForegroundColor Red
     exit 1
 }
 
-Write-Host "    升级 pip..."
+Write-Host "    Upgrading pip..."
 & $venvPython -m pip install --upgrade pip | Out-Null
 
-Write-Host "    安装依赖（使用清华镜像加速）..."
+Write-Host "    Installing dependencies (using Tsinghua mirror)..."
 $requirementsFile = Join-Path $ScriptDir "requirements.txt"
 if (-not (Test-Path $requirementsFile)) {
-    Write-Host "    ❌ 找不到 requirements.txt" -ForegroundColor Red
+    Write-Host "    ERROR: requirements.txt not found" -ForegroundColor Red
     exit 1
 }
 
 & $venvPip install -r $requirementsFile -i https://pypi.tuna.tsinghua.edu.cn/simple
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "    ⚠️  清华镜像安装失败，尝试使用默认源..." -ForegroundColor Yellow
+    Write-Host "    WARNING: Tsinghua mirror failed, trying default source..." -ForegroundColor Yellow
     & $venvPip install -r $requirementsFile
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "    ❌ 依赖安装失败" -ForegroundColor Red
+        Write-Host "    ERROR: Failed to install dependencies" -ForegroundColor Red
         exit 1
     }
 }
-Write-Host "    ✅ 依赖安装成功" -ForegroundColor Green
+Write-Host "    Dependencies installed successfully" -ForegroundColor Green
 
 # ============================================================
-# 4. 验证核心依赖
+# 4. Verify core dependencies
 # ============================================================
 Write-Host ""
-Write-Host "[4/6] 验证核心依赖..." -ForegroundColor Yellow
+Write-Host "[4/6] Verifying core dependencies..." -ForegroundColor Yellow
 
 $checkDeps = @(
     @{name = "FastAPI"; module = "fastapi" },
@@ -113,75 +113,92 @@ $allOk = $true
 foreach ($dep in $checkDeps) {
     try {
         & $venvPython -c "import $($dep.module); print('OK')" | Out-Null
-        Write-Host "    ✅ $($dep.name)" -ForegroundColor Green
+        Write-Host "    OK: $($dep.name)" -ForegroundColor Green
     }
     catch {
-        Write-Host "    ❌ $($dep.name) 导入失败" -ForegroundColor Red
+        Write-Host "    FAIL: $($dep.name) import error" -ForegroundColor Red
         $allOk = $false
     }
 }
 
-# 检查 CUDA 支持
+# Check CUDA support
 Write-Host ""
-Write-Host "    检查 GPU/CUDA 支持..."
+Write-Host "    Checking GPU/CUDA support..."
 try {
     $cudaResult = & $venvPython -c "import torch; print('CUDA:', torch.cuda.is_available()); print('Device:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU')" 2>&1
     Write-Host "    $cudaResult" -ForegroundColor Cyan
 }
 catch {
-    Write-Host "    无法检测 GPU 状态（不影响 CPU 模式运行）" -ForegroundColor Yellow
+    Write-Host "    Cannot detect GPU status (does not affect CPU mode)" -ForegroundColor Yellow
 }
 
 if (-not $allOk) {
-    Write-Host "    ⚠️  部分依赖验证失败，可能影响功能" -ForegroundColor Yellow
+    Write-Host "    WARNING: Some dependencies failed verification, functionality may be affected" -ForegroundColor Yellow
 }
 
 # ============================================================
-# 5. 创建必要目录
+# 5. Create required directories
 # ============================================================
 Write-Host ""
-Write-Host "[5/6] 创建必要目录..." -ForegroundColor Yellow
+Write-Host "[5/6] Creating required directories..." -ForegroundColor Yellow
 
 $dirs = @("models", "tmp", "data")
 foreach ($dir in $dirs) {
     $dirPath = Join-Path $ScriptDir $dir
     if (-not (Test-Path $dirPath)) {
         New-Item -ItemType Directory -Path $dirPath | Out-Null
-        Write-Host "    ✅ 创建 $dir/" -ForegroundColor Green
+        Write-Host "    Created $dir/" -ForegroundColor Green
     }
     else {
-        Write-Host "    $dir/ 已存在" -ForegroundColor Gray
+        Write-Host "    $dir/ already exists" -ForegroundColor Gray
     }
 }
 
 # ============================================================
-# 6. 完成并显示信息
+# 6. Complete and show information
 # ============================================================
 Write-Host ""
-Write-Host "[6/6] 安装完成!" -ForegroundColor Yellow
+Write-Host "[6/6] Setup complete!" -ForegroundColor Yellow
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Green
-Write-Host "  安装成功!" -ForegroundColor Green
+Write-Host "  Setup Successful!" -ForegroundColor Green
 Write-Host "============================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "使用方法:" -ForegroundColor Cyan
-Write-Host "  1. 配置 OCR 服务（如需解析扫描件）:" -ForegroundColor White
-Write-Host "     编辑 start_llama_server.bat，设置 llama.cpp 路径" -ForegroundColor Gray
+Write-Host "IMPORTANT: Before using Prism PDF, you MUST configure:" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "  2. 启动所有服务:" -ForegroundColor White
+Write-Host "  1. LLM Translation Model (REQUIRED)" -ForegroundColor White
+Write-Host "     Without this: PDF text translation will NOT work." -ForegroundColor Gray
+Write-Host "     Options:" -ForegroundColor Gray
+Write-Host "       a) Cloud API: Add OpenAI/DeepSeek/Claude etc. with API key" -ForegroundColor Gray
+Write-Host "       b) Local model: Run start_llm_llama_server.bat, then add LlamaCPP config" -ForegroundColor Gray
+Write-Host "     Go to: http://localhost:8000 -> Settings -> LLM Config" -ForegroundColor Gray
+Write-Host ""
+Write-Host "  2. PaddleVL OCR Model (REQUIRED for scanned PDFs)" -ForegroundColor White
+Write-Host "     Without this: Scanned/image PDF text extraction will NOT work." -ForegroundColor Gray
+Write-Host "     Steps:" -ForegroundColor Gray
+Write-Host "       a) Run start_llama_server.bat to start PaddleOCR-VL service" -ForegroundColor Gray
+Write-Host "       b) Go to: http://localhost:8000 -> Settings -> LLM Config -> PaddleVL" -ForegroundColor Gray
+Write-Host "       c) Add PaddleVL service URL (e.g., http://localhost:8080/v1)" -ForegroundColor Gray
+Write-Host ""
+Write-Host "  NOTE: Insufficient VRAM may cause model loading failures." -ForegroundColor Yellow
+Write-Host "  PaddleOCR-VL requires ~1.2GB VRAM (Q4 quantization)." -ForegroundColor Yellow
+Write-Host "  If VRAM is insufficient, OCR may crash or run very slowly in CPU mode." -ForegroundColor Yellow
+Write-Host ""
+Write-Host "Usage:" -ForegroundColor Cyan
+Write-Host "  1. Start all services:" -ForegroundColor White
 Write-Host "     .\start_all.bat" -ForegroundColor Gray
 Write-Host ""
-Write-Host "  3. 或分开启动（推荐调试用）:" -ForegroundColor White
-Write-Host "     终端1: .\start_llama_server.bat   # OCR服务" -ForegroundColor Gray
-Write-Host "     终端2: venv\Scripts\activate" -ForegroundColor Gray
-Write-Host "            python -m backend.main       # 主服务" -ForegroundColor Gray
+Write-Host "  2. Or start separately (for debugging):" -ForegroundColor White
+Write-Host "     Terminal 1: .\start_llama_server.bat     (OCR service)" -ForegroundColor Gray
+Write-Host "     Terminal 2: venv\Scripts\activate" -ForegroundColor Gray
+Write-Host "                python -m backend.main          (Main service)" -ForegroundColor Gray
 Write-Host ""
-Write-Host "  4. 打开浏览器访问:" -ForegroundColor White
+Write-Host "  3. Open browser:" -ForegroundColor White
 Write-Host "     http://localhost:8000" -ForegroundColor Gray
 Write-Host ""
-Write-Host "详细配置请参考:" -ForegroundColor Cyan
-Write-Host "  - README.md              快速入门" -ForegroundColor Gray
-Write-Host "  - setup.md               详细配置" -ForegroundColor Gray
-Write-Host "  - flow.md                解析流程" -ForegroundColor Gray
-Write-Host "  - hardware_requirements.md 硬件需求" -ForegroundColor Gray
+Write-Host "For details, see:" -ForegroundColor Cyan
+Write-Host "  - README.md                Quick start" -ForegroundColor Gray
+Write-Host "  - setup.md                 Detailed config" -ForegroundColor Gray
+Write-Host "  - flow.md                  Parsing flow" -ForegroundColor Gray
+Write-Host "  - hardware_requirements.md Hardware requirements" -ForegroundColor Gray
 Write-Host ""

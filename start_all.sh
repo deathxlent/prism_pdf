@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================
-# Prism PDF - 一键启动脚本 (Linux)
-# 同时启动 llama.cpp OCR 服务和主服务
+# Prism PDF - Start All Services (Linux)
+# Starts llama.cpp OCR service and main service
 # ============================================================
 
 set -e
@@ -9,7 +9,6 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -18,120 +17,119 @@ NC='\033[0m'
 
 echo ""
 echo -e "${CYAN}============================================${NC}"
-echo -e "${CYAN}  Prism PDF - 一键启动 (Linux)${NC}"
+echo -e "${CYAN}  Prism PDF - Start All Services (Linux)${NC}"
 echo -e "${CYAN}============================================${NC}"
 echo ""
 
 # ============================================================
-# 检查虚拟环境
+# Check virtual environment
 # ============================================================
 
 VENV_PYTHON="$SCRIPT_DIR/venv/bin/python"
 VENV_ACTIVATE="$SCRIPT_DIR/venv/bin/activate"
 
 if [ ! -f "$VENV_PYTHON" ]; then
-    echo -e "${RED}[错误] 未找到 Python 虚拟环境${NC}"
+    echo -e "${RED}[ERROR] Python virtual environment not found${NC}"
     echo ""
-    echo "请先运行安装脚本:"
+    echo "Please run setup first:"
     echo "  chmod +x setup.sh && ./setup.sh"
     echo ""
     exit 1
 fi
 
 # ============================================================
-# 检查 OCR 服务是否已在运行
+# Check if OCR service is already running
 # ============================================================
 
-echo -e "${YELLOW}[检测] 检查端口占用...${NC}"
+echo -e "${YELLOW}[Check] Checking port usage...${NC}"
 
 SKIP_OCR=false
 if command -v lsof &> /dev/null; then
     if lsof -ti:8080 &> /dev/null; then
-        echo -e "${YELLOW}[警告] 端口 8080 已被占用，跳过 OCR 服务启动${NC}"
-        echo "        如果 OCR 服务未正常工作，请手动检查"
+        echo -e "${YELLOW}[WARN] Port 8080 is in use, skipping OCR service start${NC}"
+        echo "        If OCR service is not working properly, please check manually"
         SKIP_OCR=true
     fi
 elif command -v ss &> /dev/null; then
     if ss -tlnp | grep -q ":8080 "; then
-        echo -e "${YELLOW}[警告] 端口 8080 已被占用，跳过 OCR 服务启动${NC}"
+        echo -e "${YELLOW}[WARN] Port 8080 is in use, skipping OCR service start${NC}"
         SKIP_OCR=true
     fi
 fi
 
 if command -v lsof &> /dev/null; then
     if lsof -ti:8000 &> /dev/null; then
-        echo -e "${YELLOW}[警告] 端口 8000 已被占用，主服务可能已在运行${NC}"
+        echo -e "${YELLOW}[WARN] Port 8000 is in use, main service may already be running${NC}"
     fi
 elif command -v ss &> /dev/null; then
     if ss -tlnp | grep -q ":8000 "; then
-        echo -e "${YELLOW}[警告] 端口 8000 已被占用，主服务可能已在运行${NC}"
+        echo -e "${YELLOW}[WARN] Port 8000 is in use, main service may already be running${NC}"
     fi
 fi
 echo ""
 
 # ============================================================
-# 启动 OCR 服务
+# Start OCR service
 # ============================================================
 
 OCR_PID=""
 
 if [ "$SKIP_OCR" = false ]; then
-    echo -e "${YELLOW}[1/2] 启动 llama.cpp OCR 服务...${NC}"
+    echo -e "${YELLOW}[1/2] Starting llama.cpp OCR service...${NC}"
     
-    # 启动OCR服务在后台子shell中
     (
         cd "$SCRIPT_DIR"
         bash "$SCRIPT_DIR/start_llama_server.sh"
     ) &
     OCR_PID=$!
     
-    echo "      OCR 服务已启动 (PID: $OCR_PID)"
+    echo "      OCR service started (PID: $OCR_PID)"
     echo ""
-    echo "      等待 OCR 服务初始化 (15秒)..."
+    echo "      Waiting for OCR service to initialize (15 seconds)..."
     sleep 15
     echo ""
 else
-    echo -e "${YELLOW}[1/2] 跳过 OCR 服务启动 (端口已占用)${NC}"
+    echo -e "${YELLOW}[1/2] Skipping OCR service start (port already in use)${NC}"
     echo ""
 fi
 
 # ============================================================
-# 启动主服务
+# Start main service
 # ============================================================
 
-echo -e "${YELLOW}[2/2] 启动 Prism PDF 主服务...${NC}"
+echo -e "${YELLOW}[2/2] Starting Prism PDF main service...${NC}"
 echo ""
-echo "      服务信息:"
-echo "        - 主服务地址: http://localhost:8000"
-echo "        - OCR 服务地址: http://localhost:8080"
-echo "        - 虚拟环境: $SCRIPT_DIR/venv"
+echo "      Service info:"
+echo "        - Main service: http://localhost:8000"
+echo "        - OCR service:  http://localhost:8080"
+echo "        - Virtual env:  $SCRIPT_DIR/venv"
 echo ""
-echo "      按 Ctrl+C 停止主服务 (OCR 服务需手动关闭)"
+echo "      Press Ctrl+C to stop main service (OCR service must be closed manually)"
 echo ""
 echo -e "${CYAN}============================================${NC}"
 echo ""
 
-# 清理函数
+# Cleanup function
 cleanup() {
     echo ""
     echo -e "${YELLOW}============================================${NC}"
-    echo -e "${YELLOW}  正在停止服务...${NC}"
+    echo -e "${YELLOW}  Stopping services...${NC}"
     echo -e "${YELLOW}============================================${NC}"
     
     if [ -n "$OCR_PID" ] && kill -0 "$OCR_PID" 2>/dev/null; then
-        echo "  停止 OCR 服务 (PID: $OCR_PID)..."
+        echo "  Stopping OCR service (PID: $OCR_PID)..."
         kill "$OCR_PID" 2>/dev/null || true
         wait "$OCR_PID" 2>/dev/null || true
     fi
     
     echo ""
-    echo -e "${GREEN}  所有服务已停止${NC}"
+    echo -e "${GREEN}  All services stopped${NC}"
     echo ""
 }
 
 trap cleanup EXIT SIGINT SIGTERM
 
-# 激活虚拟环境并启动主服务
+# Activate virtual environment and start main service
 if [ -f "$VENV_ACTIVATE" ]; then
     source "$VENV_ACTIVATE"
 fi
@@ -140,6 +138,6 @@ fi
 
 echo ""
 echo -e "${GREEN}============================================${NC}"
-echo -e "${GREEN}  主服务已停止${NC}"
+echo -e "${GREEN}  Main service stopped${NC}"
 echo -e "${GREEN}============================================${NC}"
 echo ""

@@ -136,6 +136,21 @@ async def init_db():
         except aiosqlite.OperationalError:
             pass
 
+        try:
+            await db.execute("ALTER TABLE page_elements ADD COLUMN header_footer_mark TEXT")
+        except aiosqlite.OperationalError:
+            pass
+
+        try:
+            await db.execute("ALTER TABLE pdf_pages ADD COLUMN header_y_threshold REAL")
+        except aiosqlite.OperationalError:
+            pass
+
+        try:
+            await db.execute("ALTER TABLE pdf_pages ADD COLUMN footer_y_threshold REAL")
+        except aiosqlite.OperationalError:
+            pass
+
         # Create FTS5 virtual table for full-text search
         try:
             await db.execute(FTS5_CREATE_NGRAM)

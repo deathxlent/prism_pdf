@@ -31,7 +31,8 @@ from backend.services.page_service import (
 )
 from backend.services.export_service import (
     generate_document_html, generate_page_html, generate_page_markdown,
-    generate_document_markdown,
+    generate_document_markdown, generate_rag_single_html, generate_rag_per_page_zip,
+    generate_rag_single_page_html,
 )
 
 logger = logging.getLogger(__name__)
@@ -367,6 +368,25 @@ async def export_document_html(doc_id: int):
     )
 
 
+@router.get("/documents/{doc_id}/export/markdown")
+async def export_document_markdown(doc_id: int):
+    result = await get_parse_results(doc_id)
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+
+    pages = result["pages"]
+    doc = result["document"]
+
+    md_content = generate_document_markdown(pages, doc)
+    filename = f"{Path(doc['original_filename']).stem}_解析结果.md"
+
+    return Response(
+        content=md_content,
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename.encode('utf-8').decode('latin-1')}"}
+    )
+
+
 @router.get("/pages/{page_id}/export/html")
 async def export_page_html_route(page_id: int):
     page = await db.get_page(page_id)
@@ -414,6 +434,46 @@ async def export_document_html_zip(doc_id: int):
 
     return Response(
         content=zip_buffer.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{zip_filename.encode('utf-8').decode('latin-1')}"}
+    )
+
+
+@router.get("/documents/{doc_id}/export/rag-html")
+async def export_document_rag_html(doc_id: int):
+    result = await get_parse_results(doc_id)
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+
+    pages = result["pages"]
+    doc = result["document"]
+
+    html_content = generate_rag_single_html(pages, doc)
+    filename = f"{Path(doc['original_filename']).stem}_RAG友好.html"
+
+    return Response(
+        content=html_content,
+        media_type="text/html; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename.encode('utf-8').decode('latin-1')}"}
+    )
+
+
+@router.get("/documents/{doc_id}/export/rag-html-zip")
+async def export_document_rag_html_zip(doc_id: int):
+    doc = await db.get_document(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    pages = await db.get_pages(doc_id)
+    pages_elements = {}
+    for page in pages:
+        pages_elements[page["id"]] = await db.get_elements(page["id"])
+
+    zip_bytes = generate_rag_per_page_zip(pages, doc, pages_elements)
+    zip_filename = f"{Path(doc['original_filename']).stem}_RAG友好_按页.zip"
+
+    return Response(
+        content=zip_bytes,
         media_type="application/zip",
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{zip_filename.encode('utf-8').decode('latin-1')}"}
     )
@@ -516,6 +576,27 @@ async def export_page_translated_markdown(page_id: int):
     return Response(
         content=md_content,
         media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename.encode('utf-8').decode('latin-1')}"}
+    )
+
+
+@router.get("/pages/{page_id}/export/rag-html")
+async def export_page_rag_html(page_id: int):
+    page = await db.get_page(page_id)
+    if not page:
+        raise HTTPException(status_code=404, detail="Page not found")
+
+    doc = await db.get_document(page["document_id"])
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    elements = await db.get_elements(page_id)
+    html_content = generate_rag_single_page_html(page, doc, elements)
+    filename = f"{Path(doc['original_filename']).stem}_第{page['page_number']}页_RAG友好.html"
+
+    return Response(
+        content=html_content,
+        media_type="text/html; charset=utf-8",
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename.encode('utf-8').decode('latin-1')}"}
     )
 

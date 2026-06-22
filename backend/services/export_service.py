@@ -10,6 +10,22 @@ logger = logging.getLogger(__name__)
 TEXT_TYPES = {"Caption", "Footnote", "List-item", "Page-footer", "Page-header",
               "Section-header", "Text", "Title"}
 
+HEADER_FOOTER_TYPES = {"Page-header", "Page-footer"}
+
+
+def _is_header_footer_element(elem: dict) -> bool:
+    hf_mark = elem.get("header_footer_mark")
+    if hf_mark in ("header", "footer"):
+        return True
+    etype = elem.get("element_type", "")
+    if etype in HEADER_FOOTER_TYPES:
+        return True
+    return False
+
+
+def _filter_rag_elements(elements: list) -> list:
+    return [e for e in elements if not _is_header_footer_element(e)]
+
 
 def get_html_style() -> str:
     return """
@@ -27,6 +43,9 @@ code { background-color: #f5f5f5; padding: 2px 6px; border-radius: 4px; font-fam
 .page-header, .page-footer { color: #888; font-size: 0.9em; font-style: italic; }
 .formula { text-align: center; font-size: 1.1em; margin: 15px 0; }
 .caption { font-style: italic; color: #666; text-align: center; }
+.figure-container { margin: 15px 0; text-align: center; }
+.figure-container img { max-width: 100%; height: auto; }
+.figure-caption { font-style: italic; color: #555; font-size: 0.95em; margin-top: 6px; text-align: center; }
 """
 
 
@@ -56,6 +75,16 @@ def element_to_html(elem: dict, use_translated: bool = False) -> str:
             return f"<pre>{content}</pre>"
     elif etype == "Picture":
         if content:
+            image_description = elem.get("image_description", "") or ""
+            if use_translated:
+                translated_desc = elem.get("translated_content", "") or ""
+                if translated_desc.strip():
+                    image_description = translated_desc
+            if image_description:
+                return (f'<div class="figure-container">'
+                        f'<img src="file://{content}" alt="Picture">'
+                        f'<div class="figure-caption">{image_description}</div>'
+                        f'</div>')
             return f'<img src="file://{content}" alt="Picture">'
     elif etype == "Caption":
         return f"<div class='caption'>{content}</div>"
@@ -180,7 +209,15 @@ def generate_page_markdown(page: dict, doc: dict, elements: list, text_types: se
             md_parts.append(f"\n{content}\n")
         elif etype == "Picture":
             if content:
-                md_parts.append(f"\n![Picture]({content})\n")
+                image_description = elem.get("image_description", "") or ""
+                if use_translated:
+                    translated_desc = elem.get("translated_content", "") or ""
+                    if translated_desc.strip():
+                        image_description = translated_desc
+                if image_description:
+                    md_parts.append(f"\n![{image_description}]({content})\n")
+                else:
+                    md_parts.append(f"\n![Picture]({content})\n")
         elif etype == "Caption":
             md_parts.append(f"*{content}*\n")
         elif etype in text_types:
@@ -280,8 +317,49 @@ def build_markdown(pages: list[dict]) -> str:
                     parts.append(f"\n{content}\n")
             elif etype == "Picture":
                 if content:
-                    parts.append(f"\n![Picture]({content})\n")
+                    image_description = elem.get("image_description", "") or ""
+                    if image_description:
+                        parts.append(f"\n![{image_description}]({content})\n")
+                    else:
+                        parts.append(f"\n![Picture]({content})\n")
             elif etype == "Caption":
                 parts.append(f"*{content}*\n")
 
     return "\n".join(parts)
+
+
+def generate_rag_single_html(pages: list, doc: dict) -> str:
+    filtered_pages = []
+    for page in pages:
+        filtered_elements = _filter_rag_elements(page.get("elements", []))
+        page_copy = dict(page)
+        page_copy["elements"] = filtered_elements
+        filtered_pages.append(page_copy)
+
+    return generate_document_html(filtered_pages, doc)
+
+
+def generate_rag_single_page_html(page: dict, doc: dict, elements: list) -> str:
+    filtered_elements = _filter_rag_elements(elements)
+    return generate_page_html(page, doc, filtered_elements)
+
+
+def generate_rag_per_page_zip(pages: list, doc: dict, pages_elements: dict) -> bytes:
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for page in pages:
+            if page["status"] != "completed":
+                continue
+            elements = pages_elements.get(page["id"], [])
+            if not elements:
+                continue
+            filtered_elements = _filter_rag_elements(elements)
+            if not filtered_elements:
+                continue
+            html_content = generate_page_html(page, doc, filtered_elements)
+            page_num_str = str(page["page_number"]).zfill(3)
+            filename = f"page_{page_num_str}.html"
+            zf.writestr(filename, html_content)
+
+    zip_buffer.seek(0)
+    return zip_buffer.getvalue()

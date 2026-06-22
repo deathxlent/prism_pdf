@@ -127,9 +127,9 @@ function renderLlmConfigList() {
                         ${isActive ? '<span class="active-badge">当前使用</span>' : ''}
                     </div>
                     <div class="config-actions">
-                        ${!isActive ? `<button class="btn btn-success btn-sm" onclick="activateConfig('${config.id}', '${llmCurrentType}')">
-                            <i class="fas fa-check"></i> 启用
-                        </button>` : ''}
+                        <button class="btn btn-success btn-sm" onclick="activateConfig('${config.id}', '${llmCurrentType}')" ${isActive ? 'disabled' : ''}>
+                            <i class="fas fa-check"></i> ${isActive ? '已启用' : '启用'}
+                        </button>
                         <button class="btn btn-outline btn-sm" onclick="editConfig('${config.id}', '${llmCurrentType}')">
                             <i class="fas fa-edit"></i> 编辑
                         </button>
@@ -139,13 +139,14 @@ function renderLlmConfigList() {
                     </div>
                 </div>
                 <div class="config-card-body">
+                    ${config.model ? `
                     <div class="config-info-row">
                         <span class="config-label">模型:</span>
-                        <span class="config-value">${escapeHtml(config.model || '-')}</span>
-                    </div>
+                        <span class="config-value">${escapeHtml(config.model)}</span>
+                    </div>` : ''}
                     ${config.base_url ? `
                     <div class="config-info-row">
-                        <span class="config-label">Base URL:</span>
+                        <span class="config-label">服务地址:</span>
                         <span class="config-value">${escapeHtml(config.base_url)}</span>
                     </div>` : ''}
                     ${config.supports_vision ? `
@@ -178,7 +179,9 @@ function openCreateConfigModal() {
         return `<option value="${key}">${typeInfo.name || key}</option>`;
     }).join('');
     typeSelect.value = llmCurrentType;
+    typeSelect.disabled = false;
     
+    updateConfigFormFields(llmCurrentType);
     $('#llm-config-modal').classList.remove('hidden');
 }
 
@@ -192,7 +195,9 @@ function editConfig(configId, typeKey) {
     
     $('#llm-config-modal-title').textContent = '编辑配置';
     $('#llm-config-name').value = config.display_name || config.name || '';
-    $('#llm-config-type').value = typeKey;
+    const typeSelect = $('#llm-config-type');
+    typeSelect.value = typeKey;
+    typeSelect.disabled = true;
     $('#llm-config-base-url').value = config.base_url || '';
     $('#llm-config-api-key').value = config.api_key || '';
     $('#llm-config-model').value = config.model || '';
@@ -200,12 +205,70 @@ function editConfig(configId, typeKey) {
     $('#llm-config-max-tokens').value = config.max_tokens || '4096';
     $('#llm-config-supports-vision').checked = config.supports_vision || false;
     
+    updateConfigFormFields(typeKey);
     $('#llm-config-modal').classList.remove('hidden');
+}
+
+function updateConfigFormFields(typeKey) {
+    const typeInfo = llmModelTypes[typeKey] || {};
+    const fields = typeInfo.fields || [];
+    
+    const fieldMap = {
+        'api_key': '#llm-config-api-key-group',
+        'base_url': '#llm-config-base-url-group',
+        'model': '#llm-config-model-group',
+    };
+    
+    for (const [field, selector] of Object.entries(fieldMap)) {
+        const el = $(selector);
+        if (el) {
+            el.style.display = fields.includes(field) ? '' : 'none';
+        }
+    }
+    
+    const tempRow = $('#llm-config-temperature-group');
+    if (tempRow) {
+        tempRow.style.display = (fields.includes('temperature') || fields.includes('max_tokens')) ? '' : 'none';
+    }
+    
+    const visionGroup = $('#llm-config-supports-vision-group');
+    if (visionGroup) {
+        visionGroup.style.display = typeInfo.supports_vision !== undefined ? '' : 'none';
+    }
 }
 
 function onLlmConfigTypeChange() {
     const select = $('#llm-config-type');
     const selectedType = select.value;
+    updateConfigFormFields(selectedType);
+    
+    const typeInfo = llmModelTypes[selectedType] || {};
+    const defaults = typeInfo.defaults || {};
+    
+    const baseUrlEl = $('#llm-config-base-url');
+    if (baseUrlEl) {
+        if (selectedType === 'paddlevl') {
+            baseUrlEl.placeholder = 'http://localhost:8080/v1 (PaddleVL 图片描述服务地址)';
+        } else {
+            baseUrlEl.placeholder = 'https://api.example.com/v1';
+        }
+    }
+    
+    if (defaults.base_url && !baseUrlEl.value.trim()) {
+        baseUrlEl.value = defaults.base_url;
+    }
+    if (defaults.model && !$('#llm-config-model').value.trim()) {
+        $('#llm-config-model').value = defaults.model;
+    }
+    if (defaults.api_key && !$('#llm-config-api-key').value.trim()) {
+        $('#llm-config-api-key').value = defaults.api_key;
+    }
+    if (defaults.temperature) {
+        $('#llm-config-temperature').value = defaults.temperature;
+    }
+    if (defaults.max_tokens) {
+        $('#llm-config-max-tokens').value = defaults.max_tokens;
+    }
 }
 
 async function saveLlmConfig() {
@@ -222,8 +285,17 @@ async function saveLlmConfig() {
         alert('请输入配置名称');
         return;
     }
-    if (!model) {
+
+    const typeInfo = llmModelTypes[typeKey] || {};
+    const fields = typeInfo.fields || [];
+
+    if (fields.includes('model') && !model) {
         alert('请输入模型名称');
+        return;
+    }
+
+    if (typeKey === 'paddlevl' && !baseUrl) {
+        alert('请输入 PaddleVL 服务地址');
         return;
     }
 
@@ -258,6 +330,8 @@ async function saveLlmConfig() {
 
 function closeLlmConfigModal() {
     $('#llm-config-modal').classList.add('hidden');
+    const typeSelect = $('#llm-config-type');
+    if (typeSelect) typeSelect.disabled = false;
     llmEditingConfigId = null;
 }
 
@@ -274,8 +348,6 @@ async function deleteConfig(configId, typeKey) {
 }
 
 async function activateConfig(configId, typeKey) {
-    if (!confirm('确定要启用这个配置吗？')) return;
-
     try {
         await apiActivateLlmConfig(typeKey, configId);
         await loadLlmConfigs();

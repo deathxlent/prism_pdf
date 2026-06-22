@@ -229,17 +229,6 @@ async def parse_scanned_page(
             )
             saved_element_ids.append(eid)
 
-            if eid and elem_type in ("Picture", "Figure") and content and Path(content).exists():
-                try:
-                    from backend.services.llm_service import is_vision_available, describe_image_silent
-                    if is_vision_available():
-                        desc = await asyncio.to_thread(describe_image_silent, content)
-                        if desc:
-                            await db.update_element(eid, image_description=desc)
-                            logger.info(f"Page {page_info['page_number']}: auto-described {elem_type} element {eid}")
-                except Exception as _desc_e:
-                    logger.debug(f"Auto-describe skipped for element {eid}: {_desc_e}")
-
             if need_retroactive_update and eid and prev_page_table_info and prev_page_table_info.get("element_id"):
                 await db.update_element_cross_page_group(
                     prev_page_table_info["element_id"], elem_cross_page_group
@@ -626,21 +615,67 @@ async def parse_page(
                 )
                 prev_page_table_info["cross_page_group"] = result["cross_page_group"]
 
-            if element_id and result["elem_type"] in ("Picture", "Figure"):
-                pic_content = result.get("content", "") or ""
-                if pic_content and Path(pic_content).exists():
-                    try:
-                        from backend.services.llm_service import is_vision_available, describe_image_silent
-                        if is_vision_available():
-                            desc = await asyncio.to_thread(describe_image_silent, pic_content)
-                            if desc:
-                                await db.update_element(element_id, image_description=desc)
-                                logger.info(f"Page {page_info['page_number']}: auto-described {result['elem_type']} element {element_id}")
-                    except Exception as _desc_e:
-                        logger.debug(f"Auto-describe skipped for element {element_id}: {_desc_e}")
-
     pdf_doc.close()
     await db.update_page(page_id, status="completed", is_ordered=1 if is_ordered else 0)
     logger.info(f"Page {page_info['page_number']}: parsing completed, ordered={'yes' if is_ordered else 'no'}")
 
     return current_page_last_table_info, cross_page_group_counter
+
+
+HEADER_TYPES = {"page-header", "header"}
+FOOTER_TYPES = {"page-footer", "footer", "footnote"}
+
+
+async def mark_header_footer(page_id: int):
+    elements = await db.get_elements(page_id)
+    if not elements:
+        return
+
+    header_y_threshold = None
+    footer_y_threshold = None
+
+    for elem in elements:
+        etype_lower = (elem.get("element_type") or "").lower()
+        y0 = elem.get("bbox_y0", 0)
+        y1 = elem.get("bbox_y1", 0)
+
+        if etype_lower in HEADER_TYPES:
+            if header_y_threshold is None or y1 > header_y_threshold:
+                header_y_threshold = y1
+
+        if etype_lower in FOOTER_TYPES:
+            if footer_y_threshold is None or y0 < footer_y_threshold:
+                footer_y_threshold = y0
+
+    page_updates = {}
+    if header_y_threshold is not None:
+        page_updates["header_y_threshold"] = header_y_threshold
+    if footer_y_threshold is not None:
+        page_updates["footer_y_threshold"] = footer_y_threshold
+    if page_updates:
+        await db.update_page(page_id, **page_updates)
+
+    if header_y_threshold is None and footer_y_threshold is None:
+        return
+
+    marked_count = 0
+    for elem in elements:
+        etype_lower = (elem.get("element_type") or "").lower()
+        if etype_lower in HEADER_TYPES or etype_lower in FOOTER_TYPES:
+            continue
+
+        y0 = elem.get("bbox_y0", 0)
+        y1 = elem.get("bbox_y1", 0)
+        mark = None
+
+        if header_y_threshold is not None and y0 < header_y_threshold:
+            mark = "header"
+        elif footer_y_threshold is not None and y1 > footer_y_threshold:
+            mark = "footer"
+
+        if mark:
+            await db.update_element(elem["id"], header_footer_mark=mark)
+            marked_count += 1
+
+    if marked_count > 0:
+        logger.info(f"Page {page_id}: marked {marked_count} elements as header/footer zone")

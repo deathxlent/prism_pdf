@@ -17,11 +17,11 @@ Prism PDF 是一款**完全本地化运行**的 PDF 文档智能解析工具，�
 | **阅读顺序** | 支持多栏、复杂排版的智能阅读顺序排序 |
 | **内容提取** | 原生 PDF 文本直接提取，扫描件/乱码自动切换 OCR 识别 |
 | **表格识别** | 完整 HTML 表格输出，支持 rowspan/colspan 跨行跨列、跨页表格自动合并 |
-| **图片提取** | 自动提取文档中的图片区域，保存为独立文件 |
+| **图片提取** | 自动提取文档中的图片区域，保存为独立文件，支持 Vision LLM 生成图片描述 |
 | **公式识别** | 数学公式区域检测与 LaTeX 格式输出 |
 | **机器翻译** | 单元素/单页/整文档翻译，支持自定义目标语言 |
 | **结果编辑** | Web 界面人工校正内容、调整类型、重新排序、框选添加新元素 |
-| **多格式导出** | HTML / Markdown / PDF 单页导出，支持原文和译文分别导出 |
+| **多格式导出** | HTML / Markdown / PDF 单页导出，支持原文和译文分别导出，支持 RAG 友好格式（自动去除页眉页脚） |
 | **LLM 集成** | 灵活的大模型配置管理，支持多种 LLM API 提供商 |
 
 ---
@@ -34,6 +34,11 @@ Prism PDF 是一款**完全本地化运行**的 PDF 文档智能解析工具，�
 - **智能阅读顺序**：Surya Order 模型处理多栏、复杂排版，支持 fallback 坐标排序
 - **跨行跨列表格**：完整保留 HTML 表格结构，支持 rowspan/colspan
 
+### 🖼️ 智能图片描述
+- **Vision LLM 描述**：解析完成后批量生成图片描述，作为 caption 导出
+- **页眉页脚排除**：页眉页脚区域的图片不参与描述生成，避免无效描述
+- **导出集成**：HTML 导出以 figure-caption 展示，Markdown 导出以 alt 文本展示
+
 ### 🔒 完全本地化
 - **零数据上传**：所有 AI 推理在本地完成，文档不离开你的设备
 - **离线可用**：模型文件下载后可完全断网运行
@@ -43,6 +48,11 @@ Prism PDF 是一款**完全本地化运行**的 PDF 文档智能解析工具，�
 - **翻译导出**：一键翻译并导出为 HTML/Markdown
 - **灵活的 LLM 配置**：Web 界面管理多种翻译模型提供商
 - **批量翻译**：支持单页和整文档批量翻译
+
+### 🤖 RAG 友好格式导出
+- **自动去页眉页脚**：导出时自动过滤所有页眉页脚元素（基于类型和阈值标记双重判断）
+- **两种导出模式**：可选择保留原始页码（每页单独 HTML，打包 ZIP）或不保留（合并为单个 HTML）
+- **适合知识库构建**：干净、结构化的输出可直接导入向量数据库
 
 ### ⚡ 性能优化
 - **混合加速**：YOLO/Surya 可 CPU 运行，OCR 推荐 GPU 加速
@@ -59,18 +69,14 @@ Prism PDF 是一款**完全本地化运行**的 PDF 文档智能解析工具，�
 ## 💻 系统需求
 
 ### 支持的操作系统
-| 系统 | 版本 | 说明 |
-|------|------|------|
-| **Windows** | 10/11 64 位 | 推荐，一键脚本支持最完善 |
-| **Linux** | Ubuntu 20.04+ / Debian 11+ / CentOS 8+ | 服务器部署推荐 |
-| **macOS** | 12+ (Monterey及以上) | **仅支持 Apple Silicon (M1/M2/M3/M4)**，不支持 Intel |
+**Windows** 、**Linux** 、**macOS**4
 
 ---
 
-### 🪟 Windows 配置参考
+### 🪟 纯本地运行配置参考
 
 #### 最低配置（可运行）
-| 组件 | 规格 |
+任意机器，4G以上内存，但会缺失自动阅读排序序功能，同时只用CPU加速的话，OCR会非常慢
 |------|------|
 | CPU | Intel i5-6500 / AMD Ryzen 5 1600 以上 |
 | 内存 | 16 GB DDR4 |
@@ -78,62 +84,19 @@ Prism PDF 是一款**完全本地化运行**的 PDF 文档智能解析工具，�
 | 显卡 | 核显即可（OCR 会使用 CPU，速度较慢） |
 
 #### 推荐配置（性价比最优）
-| 组件 | 规格 |
-|------|------|
-| CPU | Intel i5-12400 / AMD Ryzen 5 5600 |
-| 内存 | 32 GB DDR4-3200 |
-| 硬盘 | 100 GB NVMe SSD |
-| 显卡 | NVIDIA RTX 3060 12GB（仅 OCR 加速用） |
+8G以上NVIDIA显卡，最小模型建议使用YOLO+SURYA Order（1G显存），Qwen3.5-4B.Q4_K_M4（3G显存，如果没有翻译和图生成描述要求的话，可以不使用），OCR采用PaddleOCR-VL-1.6.Q4_K_M（3G显存，如果没有OCR需求的话，可以不使用）。
 
 #### 专业配置（批量处理）
-| 组件 | 规格 |
-|------|------|
-| CPU | Intel i7-13700F / AMD Ryzen 7 7800X3D |
-| 内存 | 32 GB DDR5-5600 |
-| 硬盘 | 200 GB NVMe PCIe 4.0 SSD |
-| 显卡 | NVIDIA RTX 4070 Ti 12GB+ |
+主要看部署的图生文模型和OCR模型，其他模型的显存需求比较低。
+
+---
+### 🪟 如果OCR和土生文模型已在其他地方部署
+纯CPU会缺失自动阅读排序序功能，其他无影响
+如果有大于1G的显存，则所有功能均可使用
 
 ---
 
-### 🐧 Linux 配置参考
-
-#### 最低配置（可运行）
-| 组件 | 规格 |
-|------|------|
-| CPU | Intel i5-6500 / AMD Ryzen 5 1600 以上 |
-| 内存 | 16 GB DDR4 |
-| 硬盘 | 50 GB 可用空间（SSD 推荐） |
-| 显卡 | 无要求（纯 CPU 模式） |
-
-#### 推荐配置（GPU 加速）
-| 组件 | 规格 |
-|------|------|
-| CPU | Intel i5-12400 / AMD Ryzen 5 5600 |
-| 内存 | 32 GB DDR4-3200 |
-| 硬盘 | 100 GB NVMe SSD |
-| 显卡 | NVIDIA RTX 3060 12GB（需安装 CUDA 12+） |
-
-> 💡 Linux 无头服务器：可无显卡运行，YOLO/Surya 使用 CPU，OCR 也可使用 CPU 模式（速度较慢）。
-
----
-
-### 🍎 macOS Apple Silicon 配置参考
-
-| 芯片型号 | 内存 | 存储 | 推荐场景 | 预计速度 |
-|---------|------|------|---------|---------|
-| **M1** | 16GB+ | 100GB+ SSD | 个人/小型文档 | OCR ~3s/页 |
-| **M1 Pro/Max** | 32GB+ | 200GB+ SSD | 专业使用 | OCR ~2s/页 |
-| **M2** | 16GB+ | 100GB+ SSD | 个人/办公 | OCR ~2.5s/页 |
-| **M2 Pro/Max** | 32GB+ | 200GB+ SSD | 批量处理 | OCR ~1.5s/页 |
-| **M3/M4** | 16GB+ | 100GB+ SSD | 最佳体验 | OCR ~1-2s/页 |
-| **M3/M4 Pro/Max/Ultra** | 32GB+ | 512GB+ SSD | 大规模处理 | OCR <1s/页 |
-
-> ✨ **Apple Silicon 优势**：Unified Memory 架构，无需担心显存不足，Metal Framework 原生加速。
-> ⚠️ **注意**：不支持 Intel 芯片的 Mac，请使用 Linux 或 Windows。
-
----
-
-> 📚 详细硬件需求与性能对比见 [hardware_requirements.md](hardware_requirements.md)
+> 📚 详细硬件需求与性能对比见由AI 生成的 [hardware_requirements.md](hardware_requirements.md) 仅供参考
 
 ---
 
@@ -465,12 +428,41 @@ python -m backend.main
 | 模型 | 翻译质量 | 速度 | 成本 | 说明 |
 |------|---------|------|------|------|
 | **GPT-4o** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ | 高 | 最佳翻译质量 |
-| **GPT-3.5-Turbo** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | 中 | 性价比高 |
 | **DeepSeek-V3** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ | 低 | 国产模型，中文优秀 |
-| **Qwen2.5-72B** | ⭐⭐⭐⭐ | ⭐⭐⭐ | 低 | 可本地部署 |
-| **本地模型** | ⭐⭐⭐ | ⭐⭐⭐⭐⭐ | 免费 | llama.cpp 运行本地 LLM |
+| **GPT-3.5-Turbo** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | 中 | 性价比高 |
+| **Qwen3.5-4B（本地）** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | 免费 | **推荐本地部署**，4B 小模型，性价比极高 |
+| **Qwen2.5-72B** | ⭐⭐⭐⭐ | ⭐⭐⭐ | 低 | 可本地部署，大模型 |
+| **其他本地模型** | ⭐⭐⭐ | ⭐⭐⭐⭐⭐ | 免费 | llama.cpp 运行本地 LLM |
 
 在 Web 界面的 **"LLM 配置"** 面板中添加和切换翻译模型。
+
+##### 推荐本地模型：Qwen3.5-4B-Claude-4.6-Opus-Reasoning-Distilled
+
+这是一款基于 Qwen3.5-4B 的蒸馏模型，由 Claude 4.6 Opus 推理能力蒸馏而来，非常适合本地部署的翻译和文档处理任务。
+
+| 量化级别 | 文件大小 | 显存占用 | 翻译质量 | 推荐场景 |
+|---------|---------|---------|---------|---------|
+| **Q4_K_M** | ~2.7 GB | ~3.5 GB | ⭐⭐⭐⭐ | **推荐，性价比最高**，4GB 显存即可 |
+| Q5_K_M | ~3.3 GB | ~4.2 GB | ⭐⭐⭐⭐ | 追求精度，6GB 显存 |
+| Q6_K | ~3.9 GB | ~4.8 GB | ⭐⭐⭐⭐⭐ | 最高精度，8GB 显存 |
+
+**快速部署步骤：**
+
+```bash
+# 1. 下载模型
+# Windows: 运行 download_qwen_model.bat
+# Linux/macOS: 运行 download_qwen_model.sh
+
+# 2. 启动 LLM 服务
+# Windows: 运行 start_llm_llama_server.bat
+# Linux:   运行 start_llm_llama_server.sh
+# macOS:   运行 start_llm_llama_server_mac.sh
+
+# 3. 在 Web 界面配置
+#    类型: LlamaCPP / OpenAI 兼容
+#    Base URL: http://127.0.0.1:8081/v1
+#    模型名称: qwen3.5-4b
+```
 
 ### 性能调优
 
@@ -528,6 +520,7 @@ YOLO_IMG_SIZE = 1280    # CPU 推理可以用较大尺寸
 | [YOLO26m Document Layout](https://huggingface.co/Armaggheddon/yolo26-document-layout) | Apache-2.0 | 文档布局检测 |
 | [Surya](https://github.com/VikParuchuri/surya) | GPL-3.0 | 文档阅读顺序排序 |
 | [PaddleOCR-VL](https://huggingface.co/PaddlePaddle/PaddleOCR-VL-1.6-GGUF) | Apache-2.0 | 多模态 OCR 识别 |
+| [Qwen3.5-4B-Claude-Distilled](https://huggingface.co/Jackrong/Qwen3.5-4B-Claude-4.6-Opus-Reasoning-Distilled-v2-GGUF) | Apache-2.0 | **推荐** 本地 LLM 翻译模型 |
 
 ### 推理框架
 

@@ -11,10 +11,60 @@ from backend.services.progress_service import (
     get_parse_progress,
     clear_parse_progress,
 )
-from backend.services.page_parser_service import parse_page, TEXT_TYPES
+from backend.services.page_parser_service import parse_page, TEXT_TYPES, mark_header_footer
 from backend.services.export_service import build_markdown
 
 logger = logging.getLogger(__name__)
+
+
+async def _describe_images_for_document(doc_id: int):
+    try:
+        from backend.services.llm_service import is_vision_available, describe_image_silent
+    except ImportError:
+        logger.info("LLM service not available, skipping image description")
+        return
+
+    if not is_vision_available():
+        logger.info(f"Doc {doc_id}: Vision LLM not available, skipping image description")
+        return
+
+    pages = await db.get_pages(doc_id)
+    picture_elements = []
+
+    for page in pages:
+        elements = await db.get_elements(page["id"])
+        for elem in elements:
+            etype = elem.get("element_type", "")
+            if etype not in ("Picture", "Figure"):
+                continue
+            hf_mark = elem.get("header_footer_mark")
+            if hf_mark in ("header", "footer"):
+                continue
+            image_path = elem.get("content", "") or ""
+            if not image_path or not Path(image_path).exists():
+                continue
+            if elem.get("image_description"):
+                continue
+            picture_elements.append(elem)
+
+    if not picture_elements:
+        logger.info(f"Doc {doc_id}: No pictures need description")
+        return
+
+    logger.info(f"Doc {doc_id}: Starting image description for {len(picture_elements)} pictures")
+    described = 0
+    for elem in picture_elements:
+        try:
+            image_path = elem["content"]
+            desc = await asyncio.to_thread(describe_image_silent, image_path)
+            if desc:
+                await db.update_element(elem["id"], image_description=desc)
+                described += 1
+                logger.info(f"Doc {doc_id}: described picture element {elem['id']} ({described}/{len(picture_elements)})")
+        except Exception as e:
+            logger.debug(f"Image description failed for element {elem['id']}: {e}")
+
+    logger.info(f"Doc {doc_id}: Image description completed: {described}/{len(picture_elements)}")
 
 
 async def process_upload(file_path: str, original_filename: str) -> dict:
@@ -199,10 +249,20 @@ async def process_document(doc_id: int):
                     doc_id, page, doc_dir, prev_page_table_info, cross_page_group_counter
                 )
                 prev_page_table_info = current_page_table_info
+                try:
+                    await mark_header_footer(page["id"])
+                except Exception as hf_e:
+                    logger.warning(f"Failed to mark header/footer for page {page['page_number']}: {hf_e}")
             except Exception as e:
                 logger.error(f"Failed to parse page {page['page_number']}: {e}")
                 prev_page_table_info = None
                 await db.update_page(page["id"], status="failed", error_message=str(e))
+
+        set_parse_progress(doc_id, "describing_images", 96, "生成图片描述")
+        try:
+            await _describe_images_for_document(doc_id)
+        except Exception as desc_e:
+            logger.warning(f"Image description step failed (non-critical): {desc_e}")
 
         set_parse_progress(doc_id, "completed", 100, "解析完成")
         await db.update_document(doc_id, status="completed")
@@ -252,6 +312,9 @@ async def get_parse_results(doc_id: int) -> dict:
                 "content": elem["content"],
                 "content_format": elem["content_format"],
                 "cross_page_group": elem.get("cross_page_group"),
+                "image_description": elem.get("image_description"),
+                "translated_content": elem.get("translated_content"),
+                "header_footer_mark": elem.get("header_footer_mark"),
             })
 
         result_pages.append(page_data)

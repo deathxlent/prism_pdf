@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================
-# Prism PDF - llama.cpp OCR Service (macOS Apple Silicon)
-# Starts PaddleOCR-VL multimodal OCR service using Metal acceleration
+# Prism PDF - llama.cpp LLM Service (macOS Apple Silicon)
+# Starts local LLM for translation and image description
 # Only supports M1/M2/M3/M4 series
 # ============================================================
 
@@ -15,7 +15,7 @@ NC='\033[0m'
 
 echo ""
 echo -e "${CYAN}============================================${NC}"
-echo -e "${CYAN}  Prism PDF - llama.cpp OCR Service (macOS)${NC}"
+echo -e "${CYAN}  Prism PDF - llama.cpp LLM Service (macOS)${NC}"
 echo -e "${CYAN}============================================${NC}"
 echo ""
 
@@ -35,27 +35,31 @@ echo ""
 # Configuration - Modify paths below as needed
 # ============================================================
 
-# llama.cpp installation directory
-LLAMACPP_DIR="$HOME/llamacpp"
+# llama.cpp installation directory (Homebrew default path)
+if command -v brew &> /dev/null && [ -f "$(brew --prefix)/bin/llama-server" ]; then
+    LLAMACPP_DIR="$(brew --prefix)/bin"
+else
+    LLAMACPP_DIR="/opt/llamacpp"
+fi
 
-# Model file paths
-MODEL_FILE="$LLAMACPP_DIR/models/PaddleOCR-VL-1.6.Q4_K_M.gguf"
-MMPROJ_FILE="$LLAMACPP_DIR/models/PaddleOCR-VL-1.6-GGUF-mmproj.gguf"
+# Model file path (Qwen3.5-4B)
+MODEL_FILE="$LLAMACPP_DIR/../share/llama.cpp/models/Qwen3.5-4B-Claude-4.6-Opus-Reasoning-Distilled-Q4_K_M.gguf"
+if [ ! -f "$MODEL_FILE" ]; then
+    MODEL_FILE="/opt/llamacpp/models/Qwen3.5-4B-Claude-4.6-Opus-Reasoning-Distilled-Q4_K_M.gguf"
+fi
 
 # Service configuration
 HOST="127.0.0.1"
-PORT="8080"
+PORT="8081"
 
-# GPU layers: 99=all GPU layers (Metal), 0=CPU only
-# On Apple Silicon, Metal acceleration is always recommended
+# GPU layers (macOS Metal: 99=all GPU)
 NGL="99"
 
-# CPU threads (recommended: performance core count)
-# M1=4-8, M2 Pro/Max=8-12, M3 Max=12-16
-THREADS=$(sysctl -n hw.perflevel0.logicalcpu 2>/dev/null || echo 8)
+# CPU threads
+THREADS=$(sysctl -n hw.ncpu 2>/dev/null || echo 8)
 
 # Context length
-CTX_LEN="4096"
+CTX_LEN="8192"
 
 # Batch size
 BATCH_SIZE="512"
@@ -66,62 +70,57 @@ BATCH_SIZE="512"
 
 echo -e "${YELLOW}[Check] Validating configuration...${NC}"
 
-if [ ! -f "$LLAMACPP_DIR/llama-server" ]; then
+LLAMA_SERVER_BIN=""
+if [ -f "$LLAMACPP_DIR/llama-server" ]; then
+    LLAMA_SERVER_BIN="$LLAMACPP_DIR/llama-server"
+elif command -v llama-server &> /dev/null; then
+    LLAMA_SERVER_BIN="llama-server"
+fi
+
+if [ -z "$LLAMA_SERVER_BIN" ]; then
     echo ""
     echo -e "${RED}[ERROR] llama-server not found${NC}"
-    echo "Path: $LLAMACPP_DIR/llama-server"
     echo ""
-    echo "Please update LLAMACPP_DIR in this script"
-    echo "Download llama.cpp from:"
+    echo "Please install llama.cpp first:"
+    echo "  brew install llama.cpp"
+    echo ""
+    echo "Or download from:"
     echo "  https://github.com/ggml-org/llama.cpp/releases"
-    echo ""
-    echo "macOS package: llama-*-bin-macos-arm64.zip"
     exit 1
 fi
+
+echo -e "${GREEN}[OK] llama-server found${NC}"
 
 if [ ! -f "$MODEL_FILE" ]; then
     echo ""
     echo -e "${RED}[ERROR] Model file not found: $MODEL_FILE${NC}"
     echo ""
-    echo "Download from:"
-    echo "  https://hf-mirror.com/PaddlePaddle/PaddleOCR-VL-1.6-GGUF"
+    echo "Please run download_qwen_model.sh to download the model"
+    echo "Or download manually from:"
+    echo "  https://hf-mirror.com/Jackrong/Qwen3.5-4B-Claude-4.6-Opus-Reasoning-Distilled-v2-GGUF"
     echo ""
-    echo "Two files required:"
-    echo "  1. PaddleOCR-VL-1.6.Q4_K_M.gguf (LLM backbone, ~286MB)"
-    echo "  2. PaddleOCR-VL-1.6-GGUF-mmproj.gguf (Vision encoder, ~841MB)"
+    echo "Recommended: Q4_K_M quantization version (~2.7 GB)"
     echo ""
     echo "Download command:"
     echo "  export HF_ENDPOINT=https://hf-mirror.com"
-    echo "  huggingface-cli download PaddlePaddle/PaddleOCR-VL-1.6-GGUF --local-dir $LLAMACPP_DIR/models"
+    echo "  huggingface-cli download Jackrong/Qwen3.5-4B-Claude-4.6-Opus-Reasoning-Distilled-v2-GGUF --local-dir ~/llama.cpp/models"
     exit 1
 fi
 
-if [ ! -f "$MMPROJ_FILE" ]; then
-    echo ""
-    echo -e "${RED}[ERROR] Vision encoder file not found: $MMPROJ_FILE${NC}"
-    echo ""
-    echo "Download from:"
-    echo "  https://hf-mirror.com/PaddlePaddle/PaddleOCR-VL-1.6-GGUF"
-    exit 1
+echo -e "${GREEN}[OK] Model file valid${NC}"
+echo ""
+
+# ============================================================
+# Check Metal support
+# ============================================================
+
+echo -e "${YELLOW}[Check] GPU status...${NC}"
+if [ "$NGL" = "99" ]; then
+    echo -e "${GREEN}[OK] Metal GPU acceleration enabled (n_gpu_layers=99)${NC}"
+    echo -e "${GREEN}     Apple Silicon model inference will use GPU${NC}"
+else
+    echo -e "${YELLOW}[WARN] Using CPU mode${NC}"
 fi
-
-echo -e "${GREEN}[OK] All file paths valid${NC}"
-echo ""
-
-# ============================================================
-# Check Apple Silicon Unified Memory
-# ============================================================
-
-echo -e "${YELLOW}[Check] System memory info...${NC}"
-TOTAL_MEM=$(sysctl -n hw.memsize 2>/dev/null | awk '{print $1/1024/1024/1024}')
-echo "      Total memory: ${TOTAL_MEM}GB"
-echo "      Performance cores: $THREADS"
-echo "      Metal acceleration: enabled (ngl=$NGL)"
-echo ""
-
-echo -e "${YELLOW}[NOTE] Apple Silicon uses Unified Memory.${NC}"
-echo -e "${YELLOW}      PaddleOCR-VL requires ~1.2GB memory (Q4 quantization).${NC}"
-echo -e "${YELLOW}      If memory is insufficient, OCR may crash or run very slowly.${NC}"
 echo ""
 
 # ============================================================
@@ -132,8 +131,8 @@ echo -e "${CYAN}============================================${NC}"
 echo -e "${CYAN}  Startup Configuration${NC}"
 echo -e "${CYAN}============================================${NC}"
 echo "  Service URL:    http://$HOST:$PORT"
+echo "  API URL:        http://$HOST:$PORT/v1"
 echo "  Model file:     $MODEL_FILE"
-echo "  Vision encoder: $MMPROJ_FILE"
 echo "  GPU layers:     $NGL (Metal)"
 echo "  CPU threads:    $THREADS"
 echo "  Context length: $CTX_LEN"
@@ -148,11 +147,8 @@ echo ""
 # Start service
 # ============================================================
 
-cd "$LLAMACPP_DIR"
-
-"$LLAMACPP_DIR/llama-server" \
+$LLAMA_SERVER_BIN \
   -m "$MODEL_FILE" \
-  --mmproj "$MMPROJ_FILE" \
   --host "$HOST" \
   --port "$PORT" \
   -ngl "$NGL" \

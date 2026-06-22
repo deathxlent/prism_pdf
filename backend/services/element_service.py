@@ -28,6 +28,8 @@ async def update_element(element_id: int, data: dict) -> dict:
             updates["image_description"] = data["image_description"]
         if "translated_content" in data:
             updates["translated_content"] = data["translated_content"]
+        if "header_footer_mark" in data:
+            updates["header_footer_mark"] = data["header_footer_mark"]
 
         if updates:
             sets = ", ".join(f"{k} = ?" for k in updates)
@@ -105,8 +107,12 @@ async def describe_image_element(element_id: int) -> dict:
     if not element:
         raise ValueError("Element not found")
 
-    if element["element_type"] != "Picture":
-        raise ValueError("Only Picture elements can be described")
+    if element["element_type"] not in ("Picture", "Figure"):
+        raise ValueError("Only Picture/Figure elements can be described")
+
+    hf_mark = element.get("header_footer_mark")
+    if hf_mark in ("header", "footer"):
+        raise ValueError("页眉页脚区域的图片不参与图片描述功能")
 
     image_path = element.get("content", "") or ""
     if not image_path or not Path(image_path).exists():
