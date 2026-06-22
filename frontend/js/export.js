@@ -127,3 +127,96 @@ async function exportCurrentPagePdf() {
         alert('导出失败: ' + e.message);
     }
 }
+
+async function exportDocumentTranslatedHtml(docId = null) {
+    const id = docId || currentDocId;
+    if (!id) return;
+    
+    try {
+        const res = await fetch(`${API}/api/documents/${id}/export/translated/html`);
+        if (!res.ok) throw new Error('Export failed');
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `document_${id}_译文.html`;
+        a.click();
+        URL.revokeObjectURL(url);
+    } catch (e) {
+        alert('导出失败: ' + e.message);
+    }
+}
+
+async function exportDocumentTranslatedMarkdown(docId = null) {
+    const id = docId || currentDocId;
+    if (!id) return;
+    
+    try {
+        const res = await fetch(`${API}/api/documents/${id}/export/translated/markdown`);
+        if (!res.ok) throw new Error('Export failed');
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `document_${id}_译文.md`;
+        a.click();
+        URL.revokeObjectURL(url);
+    } catch (e) {
+        alert('导出失败: ' + e.message);
+    }
+}
+
+async function exportDocumentTranslatedHtmlZip(docId = null) {
+    const id = docId || currentDocId;
+    if (!id) return;
+    
+    try {
+        const res = await fetch(`${API}/api/documents/${id}/export/translated/html-zip`);
+        if (!res.ok) throw new Error('Export failed');
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `document_${id}_译文_html.zip`;
+        a.click();
+        URL.revokeObjectURL(url);
+    } catch (e) {
+        alert('导出失败: ' + e.message);
+    }
+}
+
+async function exportCurrentPageTranslatedHtml() {
+    if (!currentPageData) return;
+    
+    try {
+        const res = await fetch(`${API}/api/pages/${currentPageData.id}/export/translated/html`);
+        if (!res.ok) throw new Error('Export failed');
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `page_${currentPageData.page_number}_译文.html`;
+        a.click();
+        URL.revokeObjectURL(url);
+    } catch (e) {
+        alert('导出失败: ' + e.message);
+    }
+}
+
+async function exportCurrentPageTranslatedMarkdown() {
+    if (!currentPageData) return;
+    
+    try {
+        const res = await fetch(`${API}/api/pages/${currentPageData.id}/export/translated/markdown`);
+        if (!res.ok) throw new Error('Export failed');
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `page_${currentPageData.page_number}_译文.md`;
+        a.click();
+        URL.revokeObjectURL(url);
+    } catch (e) {
+        alert('导出失败: ' + e.message);
+    }
+}

@@ -88,12 +88,29 @@
                         <span id="detail-progress-text" class="detail-progress-text">0%</span>
                         <span id="detail-progress-message" class="detail-progress-message"></span>
                     </div>
-                    <button class="btn btn-success" onclick="exportDocumentHtml()" id="export-html-btn">
-                        <i class="fas fa-file-export"></i> 导出HTML
-                    </button>
-                    <button class="btn btn-outline" onclick="exportDocumentHtmlZip()" id="export-html-zip-btn">
-                        <i class="fas fa-file-archive"></i> 导出HTML ZIP
-                    </button>
+                    <div class="btn-group" id="detail-export-group">
+                        <button class="btn btn-success" onclick="toggleDetailExportDropdown(event)" id="export-html-btn">
+                            <i class="fas fa-file-export"></i> 导出HTML
+                            <i class="fas fa-chevron-down"></i>
+                        </button>
+                        <div class="export-dropdown" id="detail-export-dropdown">
+                            <button class="dropdown-item" onclick="exportDocumentHtml()">
+                                <i class="fas fa-file-code"></i> 原文 HTML
+                            </button>
+                            <button class="dropdown-item" onclick="exportDocumentHtmlZip()">
+                                <i class="fas fa-file-archive"></i> 原文 HTML ZIP
+                            </button>
+                            <button class="dropdown-item" onclick="exportDocumentTranslatedHtml()">
+                                <i class="fas fa-file-code"></i> 译文 HTML
+                            </button>
+                            <button class="dropdown-item" onclick="exportDocumentTranslatedMarkdown()">
+                                <i class="fas fa-file-alt"></i> 译文 Markdown
+                            </button>
+                            <button class="dropdown-item" onclick="exportDocumentTranslatedHtmlZip()">
+                                <i class="fas fa-file-archive"></i> 译文 HTML ZIP
+                            </button>
+                        </div>
+                    </div>
                     <button class="btn btn-info hidden" onclick="showTranslatePageLanguageSelect()" id="translate-page-btn">
                         <i class="fas fa-language"></i> 翻译当前页
                     </button>
@@ -126,15 +143,30 @@
                             <button class="btn btn-warning btn-sm" onclick="reorderCurrentPage()" id="reorder-btn" title="使用Surya模型重排序">
                                 <i class="fas fa-sort-amount-down"></i> 重排序
                             </button>
-                            <button class="btn btn-outline btn-sm" onclick="exportCurrentPageHtml()" title="导出当前页HTML">
-                                <i class="fas fa-file-code"></i> HTML
-                            </button>
-                            <button class="btn btn-outline btn-sm" onclick="exportCurrentPageMarkdown()" title="导出当前页Markdown">
-                                <i class="fas fa-file-alt"></i> MD
-                            </button>
-                            <button class="btn btn-outline btn-sm" onclick="exportCurrentPagePdf()" title="导出当前页PDF">
-                                <i class="fas fa-file-pdf"></i> PDF
-                            </button>
+                            <div class="btn-group">
+                                <button class="btn btn-outline btn-sm" onclick="togglePageExportDropdown(event)" title="导出当前页">
+                                    <i class="fas fa-file-export"></i> 导出
+                                    <i class="fas fa-chevron-down"></i>
+                                </button>
+                                <div class="export-dropdown export-dropdown-right" id="page-export-dropdown">
+                                    <button class="dropdown-item" onclick="exportCurrentPageHtml()">
+                                        <i class="fas fa-file-code"></i> 原文 HTML
+                                    </button>
+                                    <button class="dropdown-item" onclick="exportCurrentPageMarkdown()">
+                                        <i class="fas fa-file-alt"></i> 原文 Markdown
+                                    </button>
+                                    <button class="dropdown-item" onclick="exportCurrentPagePdf()">
+                                        <i class="fas fa-file-pdf"></i> 原文 PDF
+                                    </button>
+                                    <div class="dropdown-divider"></div>
+                                    <button class="dropdown-item" onclick="exportCurrentPageTranslatedHtml()">
+                                        <i class="fas fa-file-code"></i> 译文 HTML
+                                    </button>
+                                    <button class="dropdown-item" onclick="exportCurrentPageTranslatedMarkdown()">
+                                        <i class="fas fa-file-alt"></i> 译文 Markdown
+                                    </button>
+                                </div>
+                            </div>
                         </div>
                     </div>
                     <div class="pdf-wrapper">

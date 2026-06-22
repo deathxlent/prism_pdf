@@ -31,6 +31,7 @@ from backend.services.page_service import (
 )
 from backend.services.export_service import (
     generate_document_html, generate_page_html, generate_page_markdown,
+    generate_document_markdown,
 )
 
 logger = logging.getLogger(__name__)
@@ -436,6 +437,117 @@ async def export_page_markdown_route(page_id: int):
         content=md_content,
         media_type="text/markdown; charset=utf-8",
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename.encode('utf-8').decode('latin-1')}"}
+    )
+
+
+@router.get("/documents/{doc_id}/export/translated/html")
+async def export_document_translated_html(doc_id: int):
+    result = await get_parse_results(doc_id)
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+
+    pages = result["pages"]
+    doc = result["document"]
+
+    html_content = generate_document_html(pages, doc, use_translated=True)
+    filename = f"{Path(doc['original_filename']).stem}_译文.html"
+
+    return Response(
+        content=html_content,
+        media_type="text/html; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename.encode('utf-8').decode('latin-1')}"}
+    )
+
+
+@router.get("/documents/{doc_id}/export/translated/markdown")
+async def export_document_translated_markdown(doc_id: int):
+    result = await get_parse_results(doc_id)
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+
+    pages = result["pages"]
+    doc = result["document"]
+
+    md_content = generate_document_markdown(pages, doc, use_translated=True)
+    filename = f"{Path(doc['original_filename']).stem}_译文.md"
+
+    return Response(
+        content=md_content,
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename.encode('utf-8').decode('latin-1')}"}
+    )
+
+
+@router.get("/pages/{page_id}/export/translated/html")
+async def export_page_translated_html(page_id: int):
+    page = await db.get_page(page_id)
+    if not page:
+        raise HTTPException(status_code=404, detail="Page not found")
+
+    doc = await db.get_document(page["document_id"])
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    elements = await db.get_elements(page_id)
+    html_content = generate_page_html(page, doc, elements, use_translated=True)
+    filename = f"{Path(doc['original_filename']).stem}_第{page['page_number']}页_译文.html"
+
+    return Response(
+        content=html_content,
+        media_type="text/html; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename.encode('utf-8').decode('latin-1')}"}
+    )
+
+
+@router.get("/pages/{page_id}/export/translated/markdown")
+async def export_page_translated_markdown(page_id: int):
+    page = await db.get_page(page_id)
+    if not page:
+        raise HTTPException(status_code=404, detail="Page not found")
+
+    doc = await db.get_document(page["document_id"])
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    elements = await db.get_elements(page_id)
+    md_content = generate_page_markdown(page, doc, elements, TEXT_TYPES, use_translated=True)
+    filename = f"{Path(doc['original_filename']).stem}_第{page['page_number']}页_译文.md"
+
+    return Response(
+        content=md_content,
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename.encode('utf-8').decode('latin-1')}"}
+    )
+
+
+@router.get("/documents/{doc_id}/export/translated/html-zip")
+async def export_document_translated_html_zip(doc_id: int):
+    doc = await db.get_document(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    pages = await db.get_pages(doc_id)
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for page in pages:
+            if page["status"] != "completed":
+                continue
+            elements = await db.get_elements(page["id"])
+            if not elements:
+                continue
+            html_content = generate_page_html(page, doc, elements, use_translated=True)
+            page_num_str = str(page["page_number"]).zfill(3)
+            filename = f"page_{page_num_str}_译文.html"
+            zf.writestr(filename, html_content)
+
+    zip_buffer.seek(0)
+    zip_filename = f"{Path(doc['original_filename']).stem}_pages_译文_html.zip"
+
+    return Response(
+        content=zip_buffer.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{zip_filename.encode('utf-8').decode('latin-1')}"}
     )
 
 

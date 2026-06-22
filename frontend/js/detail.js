@@ -61,17 +61,15 @@ function renderThumbnails() {
             `<div class="thumb-placeholder">第 ${page.page_number} 页</div>`;
 
         const unorderedBadge = page.is_ordered === false ? 
-            '<div class="thumb-unordered-badge" title="未排序"><i class="fas fa-exclamation-triangle"></i></div>' : '';
+            '<div class="thumb-unordered" title="未排序"><i class="fas fa-exclamation-triangle"></i></div>' : '';
 
         return `
-            <div class="thumbnail-item ${idx === currentPageIndex ? 'active' : ''}" 
+            <div class="thumb-item ${idx === currentPageIndex ? 'active' : ''}" 
                  onclick="goToPage(${idx})"
                  data-page-index="${idx}">
-                <div class="thumbnail-img">
-                    ${thumbnail}
-                    ${unorderedBadge}
-                </div>
-                <div class="page-number">第 ${page.page_number} 页</div>
+                ${thumbnail}
+                ${unorderedBadge}
+                <div class="thumb-page-num">第 ${page.page_number} 页</div>
             </div>
         `;
     }).join('');
@@ -95,7 +93,7 @@ async function loadPage(pageIndex) {
     const page = currentPages[pageIndex];
     currentPageData = page;
 
-    $$('.thumbnail-item').forEach((item, idx) => {
+    $$('.thumb-item').forEach((item, idx) => {
         item.classList.toggle('active', idx === pageIndex);
     });
 
@@ -238,4 +236,30 @@ function backToDocuments() {
     }
     currentDocId = null;
     navigateTo('home');
+}
+
+function toggleDetailExportDropdown(event) {
+    event.stopPropagation();
+    const dropdown = document.getElementById('detail-export-dropdown');
+    
+    document.querySelectorAll('.export-dropdown').forEach(d => {
+        if (d !== dropdown) {
+            d.classList.remove('show');
+        }
+    });
+    
+    dropdown.classList.toggle('show');
+}
+
+function togglePageExportDropdown(event) {
+    event.stopPropagation();
+    const dropdown = document.getElementById('page-export-dropdown');
+    
+    document.querySelectorAll('.export-dropdown').forEach(d => {
+        if (d !== dropdown) {
+            d.classList.remove('show');
+        }
+    });
+    
+    dropdown.classList.toggle('show');
 }

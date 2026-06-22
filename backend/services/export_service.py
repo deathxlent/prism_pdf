@@ -30,10 +30,14 @@ code { background-color: #f5f5f5; padding: 2px 6px; border-radius: 4px; font-fam
 """
 
 
-def element_to_html(elem: dict) -> str:
+def element_to_html(elem: dict, use_translated: bool = False) -> str:
     etype = elem["element_type"]
     content = elem.get("content", "") or ""
     content_format = elem.get("content_format", "") or ""
+    translated_content = elem.get("translated_content", "") or ""
+
+    if use_translated and translated_content.strip():
+        content = translated_content
 
     if etype == "Title":
         return f"<h1 style='color: #dc143c;'>{content}</h1>"
@@ -83,19 +87,20 @@ def build_html_document(title: str, body_html: str) -> str:
     ])
 
 
-def generate_page_html(page: dict, doc: dict, elements: list) -> str:
+def generate_page_html(page: dict, doc: dict, elements: list, use_translated: bool = False) -> str:
     sorted_elements = sorted(elements, key=lambda e: e["reading_order"])
     body_parts = [f"<h1>第 {page['page_number']} 页</h1>"]
     for elem in sorted_elements:
-        html = element_to_html(elem)
+        html = element_to_html(elem, use_translated)
         if html:
             body_parts.append(html)
     body_html = "\n".join(body_parts)
-    title = f"{doc['original_filename']} - 第 {page['page_number']} 页"
+    suffix = " - 译文" if use_translated else ""
+    title = f"{doc['original_filename']} - 第 {page['page_number']} 页{suffix}"
     return build_html_document(title, body_html)
 
 
-def generate_document_html(pages: list, doc: dict) -> str:
+def generate_document_html(pages: list, doc: dict, use_translated: bool = False) -> str:
     pages = merge_cross_page_tables(pages)
 
     first_elem_per_group = {}
@@ -118,12 +123,13 @@ def generate_document_html(pages: list, doc: dict) -> str:
             if elem["element_type"] == "Table" and cpg in skip_groups and cpg is not None:
                 if first_elem_per_group.get(cpg) != elem["id"]:
                     continue
-            html = element_to_html(elem)
+            html = element_to_html(elem, use_translated)
             if html:
                 body_parts.append(html)
 
     body_html = "\n".join(body_parts)
-    title = f"{doc['original_filename']} - 解析结果"
+    suffix = " - 译文" if use_translated else " - 解析结果"
+    title = f"{doc['original_filename']}{suffix}"
     return build_html_document(title, body_html)
 
 
@@ -149,15 +155,20 @@ DEFAULT_TEXT_TYPES = {"Caption", "Footnote", "List-item", "Page-footer", "Page-h
                         "Section-header", "Text", "Title"}
 
 
-def generate_page_markdown(page: dict, doc: dict, elements: list, text_types: set | None = None) -> str:
+def generate_page_markdown(page: dict, doc: dict, elements: list, text_types: set | None = None, use_translated: bool = False) -> str:
     text_types = text_types or DEFAULT_TEXT_TYPES
     sorted_elements = sorted(elements, key=lambda e: e["reading_order"])
-    md_parts = [f"# 第 {page['page_number']} 页\n"]
+    suffix = " - 译文" if use_translated else ""
+    md_parts = [f"# 第 {page['page_number']} 页{suffix}\n"]
 
     for elem in sorted_elements:
         etype = elem["element_type"]
         content = elem.get("content", "") or ""
         content_format = elem.get("content_format", "") or ""
+        translated_content = elem.get("translated_content", "") or ""
+
+        if use_translated and translated_content.strip():
+            content = translated_content
 
         if etype == "Title":
             md_parts.append(f"# {content}\n")
@@ -178,6 +189,63 @@ def generate_page_markdown(page: dict, doc: dict, elements: list, text_types: se
         else:
             if content.strip():
                 md_parts.append(f"{content}\n")
+
+    return "\n".join(md_parts)
+
+
+def generate_document_markdown(pages: list, doc: dict, use_translated: bool = False) -> str:
+    text_types = DEFAULT_TEXT_TYPES
+    pages = merge_cross_page_tables(pages)
+    suffix = " - 译文" if use_translated else ""
+    md_parts = [f"# {doc['original_filename']}{suffix}\n"]
+
+    first_elem_per_group = {}
+    for page in pages:
+        for elem in sorted(page["elements"], key=lambda e: e["reading_order"]):
+            cpg = elem.get("cross_page_group")
+            if cpg is not None and elem["element_type"] == "Table" and cpg not in first_elem_per_group:
+                first_elem_per_group[cpg] = elem["id"]
+
+    for page in pages:
+        page_num = page["page_number"]
+        md_parts.append(f"\n---\n## 第 {page_num} 页\n")
+
+        elements = sorted(page["elements"], key=lambda e: e["reading_order"])
+        skip_groups = page.get("_skip_groups", set())
+
+        for elem in elements:
+            etype = elem["element_type"]
+            content = elem.get("content", "") or ""
+            content_format = elem.get("content_format", "") or ""
+            translated_content = elem.get("translated_content", "") or ""
+            cpg = elem.get("cross_page_group")
+
+            if use_translated and translated_content.strip():
+                content = translated_content
+
+            if elem["element_type"] == "Table" and cpg in skip_groups and cpg is not None:
+                if first_elem_per_group.get(cpg) != elem["id"]:
+                    continue
+
+            if etype == "Title":
+                md_parts.append(f"# {content}\n")
+            elif etype == "Section-header":
+                md_parts.append(f"## {content}\n")
+            elif etype == "Formula":
+                md_parts.append(f"\n{content}\n")
+            elif etype == "Table":
+                md_parts.append(f"\n{content}\n")
+            elif etype == "Picture":
+                if content:
+                    md_parts.append(f"\n![Picture]({content})\n")
+            elif etype == "Caption":
+                md_parts.append(f"*{content}*\n")
+            elif etype in text_types:
+                if content.strip():
+                    md_parts.append(f"{content}\n")
+            else:
+                if content.strip():
+                    md_parts.append(f"{content}\n")
 
     return "\n".join(md_parts)
 

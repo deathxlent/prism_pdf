@@ -1312,6 +1312,77 @@ textarea.form-control {
     transform: translateY(-1px);
 }
 
+.btn-secondary {
+    background: #6b7280;
+    color: white;
+}
+
+.btn-secondary:hover {
+    background: #4b5563;
+}
+
+.btn-group {
+    position: relative;
+    display: inline-flex;
+}
+
+.export-dropdown {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 10px 25px rgba(0,0,0,0.15);
+    min-width: 160px;
+    z-index: 100;
+    display: none;
+    border: 1px solid var(--border);
+    overflow: hidden;
+    margin-top: 4px;
+}
+
+.export-dropdown.show {
+    display: block;
+    animation: dropdownFade 0.15s ease-out;
+}
+
+.dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+    padding: 0.625rem 1rem;
+    background: none;
+    border: none;
+    cursor: pointer;
+    text-align: left;
+    font-size: 0.85rem;
+    color: var(--text);
+    transition: background 0.15s;
+    white-space: nowrap;
+}
+
+.dropdown-item:hover {
+    background: var(--bg);
+}
+
+.dropdown-item i {
+    width: 16px;
+    text-align: center;
+    color: var(--primary);
+}
+
+.dropdown-divider {
+    height: 1px;
+    background: var(--border);
+    margin: 0.25rem 0;
+}
+
+.export-dropdown-right {
+    left: auto;
+    right: 0;
+}
+
 .top-menu-dropdown {
     position: relative;
 }
@@ -1854,6 +1925,66 @@ textarea.form-control {
     margin-bottom: 1rem;
     padding-bottom: 1rem;
     border-bottom: 1px solid var(--border-light);
+}
+
+.config-card {
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.25rem;
+    margin-bottom: 1rem;
+    box-shadow: var(--shadow-sm);
+    transition: all 0.2s;
+}
+
+.config-card:hover {
+    box-shadow: var(--shadow);
+    transform: translateY(-1px);
+}
+
+.config-card.active {
+    border-color: var(--primary);
+    background: linear-gradient(135deg, #f0fdf4, #ecfdf5);
+}
+
+.config-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+    gap: 1rem;
+}
+
+.config-name {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: var(--text);
+}
+
+.config-name i {
+    color: var(--primary);
+    font-size: 1.1rem;
+}
+
+.config-actions {
+    display: flex;
+    gap: 0.5rem;
+    flex-shrink: 0;
+}
+
+.config-card-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.config-info-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
 }
 
 .config-field {

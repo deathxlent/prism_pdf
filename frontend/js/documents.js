@@ -146,6 +146,24 @@ function renderDocumentsList(docs) {
                                 `<button class="btn btn-info btn-sm" onclick="event.stopPropagation(); showDocTranslateLanguageSelect(${doc.id})">
                                     <i class="fas fa-language"></i> 翻译
                                 </button>` : ''}
+                            ${doc.status === 'completed' ? 
+                                `<div class="btn-group" onclick="event.stopPropagation();">
+                                    <button class="btn btn-secondary btn-sm" onclick="toggleExportDropdown(${doc.id}, event)">
+                                        <i class="fas fa-file-export"></i> 导出译文
+                                        <i class="fas fa-chevron-down"></i>
+                                    </button>
+                                    <div class="export-dropdown" id="export-dropdown-${doc.id}">
+                                        <button class="dropdown-item" onclick="exportDocumentTranslatedHtml(${doc.id})">
+                                            <i class="fas fa-file-code"></i> HTML
+                                        </button>
+                                        <button class="dropdown-item" onclick="exportDocumentTranslatedMarkdown(${doc.id})">
+                                            <i class="fas fa-file-alt"></i> Markdown
+                                        </button>
+                                        <button class="dropdown-item" onclick="exportDocumentTranslatedHtmlZip(${doc.id})">
+                                            <i class="fas fa-file-archive"></i> HTML ZIP
+                                        </button>
+                                    </div>
+                                </div>` : ''}
                             <button class="btn btn-success btn-sm" onclick="event.stopPropagation(); viewDocument(${doc.id})">
                                 <i class="fas fa-eye"></i> 查看
                             </button>
@@ -224,3 +242,22 @@ async function deleteDocument(docId) {
 function viewDocument(docId) {
     navigateTo(`detail/${docId}`);
 }
+
+function toggleExportDropdown(docId, event) {
+    event.stopPropagation();
+    const dropdown = document.getElementById(`export-dropdown-${docId}`);
+    
+    document.querySelectorAll('.export-dropdown').forEach(d => {
+        if (d !== dropdown) {
+            d.classList.remove('show');
+        }
+    });
+    
+    dropdown.classList.toggle('show');
+}
+
+document.addEventListener('click', () => {
+    document.querySelectorAll('.export-dropdown').forEach(d => {
+        d.classList.remove('show');
+    });
+});
