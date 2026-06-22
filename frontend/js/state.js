@@ -1,0 +1,35 @@
+let currentDocId = null;
+let currentPageIndex = 0;
+let currentPageData = null;
+let currentPages = [];
+let currentElements = [];
+let currentDocument = null;
+let editingElementId = null;
+let isEditOrderMode = false;
+let originalOrder = [];
+let currentPdfDoc = null;
+let currentScale = 1.5;
+let activeElementId = null;
+let draggedElement = null;
+let progressPollInterval = null;
+let isAddElementMode = false;
+let selectionStart = null;
+let selectionRect = null;
+let selectionOverlay = null;
+let selectedBbox = null;
+let pendingNewElement = null;
+let reorderingPages = new Set();
+let activeLlmConfig = null;
+let languageSelectCallback = null;
+
+let llmModelTypes = {};
+let llmConfigsData = {};
+let llmCurrentType = 'openai';
+let llmEditingConfigId = null;
+let llmStatusRefreshTimer = null;
+
+let searchResults = [];
+let currentSearchIndex = -1;
+let searchDebounceTimer = null;
+let isSearchPanelDragging = false;
+let dragOffset = { x: 0, y: 0 };
