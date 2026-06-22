@@ -234,9 +234,8 @@ async def get_parse_results(doc_id: int) -> dict:
             "is_scanned": bool(page["is_scanned"]),
             "is_ordered": bool(page.get("is_ordered", 1)),
             "status": page["status"],
-            "jpg_path": page["jpg_path"],
-            "single_pdf_path": page["single_pdf_path"],
-            "thumbnail_path": page["thumbnail_path"],
+            "jpg_path": page.get("jpg_path"),
+            "single_pdf_path": page.get("single_pdf_path"),
             "elements": [],
         }
 

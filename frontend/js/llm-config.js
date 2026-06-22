@@ -15,7 +15,7 @@ async function initLlmConfig() {
 async function loadLlmConfigTypes() {
     try {
         const data = await apiGetLlmConfigTypes();
-        llmModelTypes = data.types || {};
+        llmModelTypes = data.model_types || data.types || {};
     } catch (e) {
         console.error('Failed to load LLM config types:', e);
     }
@@ -25,13 +25,18 @@ async function loadLlmConfigs() {
     try {
         const data = await apiGetLlmConfigs();
         llmConfigsData = data.configs || {};
+        const types = data.model_types || data.types || llmModelTypes;
+        llmModelTypes = types;
         
-        if (llmModelTypes) {
-            for (const typeKey of Object.keys(llmModelTypes)) {
-                if (!llmConfigsData[typeKey]) {
-                    llmConfigsData[typeKey] = [];
-                }
+        for (const typeKey of Object.keys(llmModelTypes)) {
+            if (!llmConfigsData[typeKey]) {
+                llmConfigsData[typeKey] = [];
             }
+        }
+        
+        const activeType = data.active_type;
+        if (activeType && llmModelTypes[activeType]) {
+            llmCurrentType = activeType;
         }
     } catch (e) {
         console.error('Failed to load LLM configs:', e);
@@ -43,10 +48,15 @@ async function loadActiveConfigDisplay() {
         const data = await apiGetActiveLlmConfig();
         activeLlmConfig = data.active_config || null;
         
+        const activeType = data.active_type;
+        if (activeType && llmModelTypes[activeType]) {
+            llmCurrentType = activeType;
+        }
+        
         const typeBadge = $('#current-active-type');
         if (typeBadge && activeLlmConfig) {
-            const typeInfo = llmModelTypes[activeLlmConfig.type];
-            typeBadge.textContent = typeInfo ? typeInfo.name : activeLlmConfig.type;
+            const typeInfo = llmModelTypes[activeType || llmCurrentType];
+            typeBadge.textContent = typeInfo ? typeInfo.name : (activeType || llmCurrentType);
         }
     } catch (e) {
         console.error('Failed to load active config:', e);

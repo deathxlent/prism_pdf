@@ -56,8 +56,8 @@ function renderThumbnails() {
     }
 
     container.innerHTML = currentPages.map((page, idx) => {
-        const thumbnail = page.thumbnail_path ? 
-            `<img src="${API}/api/file/${encodeURIComponent(page.thumbnail_path)}" alt="第 ${page.page_number} 页" loading="lazy">` :
+        const thumbnail = page.id ? 
+            `<img src="${API}/api/pages/${page.id}/jpg" alt="第 ${page.page_number} 页" loading="lazy" onerror="this.outerHTML='<div class=\\'thumb-placeholder\\'>第 ${page.page_number} 页</div>'">` :
             `<div class="thumb-placeholder">第 ${page.page_number} 页</div>`;
 
         const unorderedBadge = page.is_ordered === false ? 

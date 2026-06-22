@@ -257,6 +257,17 @@ async def get_document_thumbnail(doc_id: int):
     return {"error": "No thumbnail available"}, 404
 
 
+@router.get("/pages/{page_id}/jpg")
+async def get_page_jpg(page_id: int):
+    page = await db.get_page(page_id)
+    if not page:
+        raise HTTPException(status_code=404, detail="Page not found")
+    jpg_path = page.get("jpg_path")
+    if jpg_path and os.path.exists(jpg_path):
+        return FileResponse(jpg_path)
+    raise HTTPException(status_code=404, detail="Page image not found")
+
+
 @router.get("/pages/{page_id}/pdf")
 async def get_page_pdf(page_id: int):
     try:
