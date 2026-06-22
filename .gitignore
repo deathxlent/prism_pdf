@@ -6,3 +6,4 @@ __pycache__/
 *.db
 llm_config*.json
 **/llm_config*.json
+.omo/
