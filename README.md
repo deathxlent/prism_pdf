@@ -102,40 +102,63 @@ Prism PDF 是一款**完全本地化运行**的 PDF 文档智能解析工具，�
 
 ## 🏗️ 技术架构
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Web 前端 (index.html)                    │
-│   三栏式界面：缩略图导航 + PDF 预览 + 解析结果编辑              │
-│   原生 HTML/CSS/JS · PDF.js · Font Awesome 6                   │
-└────────────────────────────┬────────────────────────────────────┘
-                             │ HTTP API (FastAPI)
-┌────────────────────────────▼────────────────────────────────────┐
-│                   FastAPI 后端 (uvicorn)                        │
-│  ┌──────────────────────────────────────────────────────────┐  │
-│  │                    API 路由层 (routes.py)                 │  │
-│  │  /upload /parse /status /results /export /translate ... │  │
-│  └────────────────────┬─────────────────────────────────────┘  │
-│                       │                                          │
-│  ┌────────────────────▼─────────────────────────────────────┐  │
-│  │                 主解析调度层 (parse_service.py)          │  │
-│  │    process_upload() → process_document() → _parse_page()│  │
-│  └──────┬──────────────┬──────────────┬─────────────────────┘  │
-│         │              │              │                          │
-│  ┌──────▼─────┐ ┌──────▼─────┐ ┌────▼───────────┐              │
-│  │ PDF 基础   │ │ 布局检测    │ │ 阅读顺序排序   │              │
-│  │ 服务       │ │ YOLO26m    │ │ Surya Order    │              │
-│  └──────┬─────┘ └────────────┘ └────┬───────────┘              │
-│         │                           │                          │
-│  ┌──────▼─────┐ ┌────────────┐ ┌────▼───────────┐              │
-│  │ 表格提取   │ │ 图片提取    │ │ OCR 服务       │              │
-│  │ (原生+扫描)│ │            │ │ llama.cpp VL   │              │
-│  └────────────┘ └────────────┘ └────┬───────────┘              │
-│                                     │                          │
-│  ┌─────────────────────┐    ┌──────▼──────┐                    │
-│  │  SQLite 数据库      │    │ llama-server │                    │
-│  │  (aiosqlite)        │    │ (独立进程)   │                    │
-│  └─────────────────────┘    └─────────────┘                    │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph Frontend["🌐 Web Frontend (index.html)"]
+        FE1["3-Column UI"]
+        FE2["Thumbnail Nav + PDF Preview + Result Editor"]
+        FE3["Vanilla HTML/CSS/JS · PDF.js · Font Awesome 6"]
+    end
+
+    subgraph Backend["⚙️ FastAPI Backend (uvicorn)"]
+        direction TB
+
+        API["🛣️ API Routes (routes.py)
+        /upload · /parse · /status · /results · /export · /translate"]
+
+        Orchestrator["🔄 Main Parse Orchestrator (parse_service.py)
+        process_upload() → process_document() → _parse_page()"]
+
+        subgraph CoreServices["Core Services"]
+            direction LR
+            PDF["📄 PDF Core Service"]
+            Layout["🔍 Layout Detection
+            YOLO26m"]
+            Order["📐 Reading Order
+            Surya Order"]
+        end
+
+        subgraph ExtractServices["Extraction Services"]
+            direction LR
+            Table["📊 Table Extraction
+            (Native + Scan)"]
+            Image["🖼️ Image Extraction"]
+            OCR["🔤 OCR Service
+            llama.cpp VL"]
+        end
+
+        subgraph Storage["Persistence & External"]
+            direction LR
+            DB["💾 SQLite Database
+            (aiosqlite)"]
+            LLAMA["⚡ llama-server
+            (Separate Process)"]
+        end
+    end
+
+    Frontend -- "HTTP API (FastAPI)" --> Backend
+    API --> Orchestrator
+    Orchestrator --> PDF
+    Orchestrator --> Layout
+    Orchestrator --> Order
+
+    PDF --> Table
+    Order --> OCR
+    Layout --> Table
+    Layout --> Image
+
+    OCR --> LLAMA
+    Orchestrator --> DB
 ```
 
 ### 技术栈明细
