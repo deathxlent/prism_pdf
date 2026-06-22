@@ -31,9 +31,9 @@ async function loadResourceStatus() {
             const gpuFill = gpuBar ? gpuBar.querySelector('.gpu-fill') : null;
             
             if (gpuText) {
-                if (data.gpu.available) {
-                    const used = data.gpu.used_gb || 0;
-                    const total = data.gpu.total_gb || 0;
+                if (data.gpu.cuda_available) {
+                    const used = (data.gpu.used_vram_mb || 0) / 1024;
+                    const total = (data.gpu.total_vram_mb || 0) / 1024;
                     gpuText.textContent = `${used.toFixed(1)} / ${total.toFixed(1)} GB`;
                     
                     if (gpuBar && total > 0) {
@@ -60,16 +60,17 @@ async function loadResourceStatus() {
             }
         }
         
-        if (data.surya) {
+        const surya = data.surya_order || data.surya;
+        if (surya) {
             const suryaText = $('#surya-status-text');
             const suryaMem = $('#surya-mem-text');
             
             if (suryaText) {
-                suryaText.textContent = data.surya.loaded ? '已加载' : '未加载';
-                suryaText.className = 'resource-value ' + (data.surya.loaded ? 'status-ready' : 'status-idle');
+                suryaText.textContent = surya.loaded ? '已加载' : '未加载';
+                suryaText.className = 'resource-value ' + (surya.loaded ? 'status-ready' : 'status-idle');
             }
-            if (suryaMem && data.surya.memory_mb) {
-                suryaMem.textContent = `占用 ${data.surya.memory_mb.toFixed(0)} MB`;
+            if (suryaMem && surya.memory_mb) {
+                suryaMem.textContent = `占用 ${surya.memory_mb.toFixed(0)} MB`;
             }
         }
     } catch (e) {

@@ -39,8 +39,11 @@ function handleRoute() {
         loadDocumentDetail(parseInt(param));
     } else if (route === 'llm-config') {
         $('#page-llm-config').classList.add('active');
+        renderLlmTabs();
+        loadResourceStatus();
     } else {
         $('#page-home').classList.add('active');
+        loadDocuments();
     }
 
     closeTopMenu();

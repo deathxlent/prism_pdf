@@ -225,13 +225,18 @@ async def get_parse_results(doc_id: int) -> dict:
     for page in pages:
         elements = await db.get_elements(page["id"])
         page_data = {
+            "id": page["id"],
             "page_number": page["page_number"],
             "width": page["width"],
             "height": page["height"],
             "jpg_width": page["jpg_width"],
             "jpg_height": page["jpg_height"],
             "is_scanned": bool(page["is_scanned"]),
+            "is_ordered": bool(page.get("is_ordered", 1)),
             "status": page["status"],
+            "jpg_path": page["jpg_path"],
+            "single_pdf_path": page["single_pdf_path"],
+            "thumbnail_path": page["thumbnail_path"],
             "elements": [],
         }
 
