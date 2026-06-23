@@ -479,6 +479,7 @@ async function saveNewElement() {
 }
 
 async function describeImage(elementId) {
+    showLoading('正在使用AI生成图片描述...');
     try {
         const result = await apiDescribeImage(elementId);
         const idx = currentElements.findIndex(e => e.id === elementId);
@@ -486,8 +487,10 @@ async function describeImage(elementId) {
             currentElements[idx].image_description = result.image_description;
         }
         renderElements();
+        hideLoading();
         alert('图片描述已生成');
     } catch (e) {
+        hideLoading();
         alert('生成图片描述失败: ' + e.message);
     }
 }
@@ -502,6 +505,7 @@ async function reorderCurrentPage() {
     if (!confirm(confirmMsg)) return;
 
     reorderingPages.add(pageId);
+    showLoading('正在使用Surya模型进行重排序...');
     
     const reorderBtn = $('#reorder-btn');
     reorderBtn.disabled = true;
@@ -524,9 +528,11 @@ async function reorderCurrentPage() {
             loadPage(currentPageIndex);
         }
         
+        hideLoading();
         alert('重排序成功！页面元素已重新排序。');
     } catch (e) {
         console.error('Reorder failed:', e);
+        hideLoading();
         alert('重排序失败: ' + e.message);
     } finally {
         reorderingPages.delete(pageId);

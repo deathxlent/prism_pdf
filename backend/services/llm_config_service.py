@@ -296,15 +296,23 @@ def create_config(type_key: str, config_data: dict) -> dict:
 
 
 def update_config(type_key: str, config_id: str, config_data: dict) -> Optional[dict]:
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(f"update_config called: type_key={type_key}, config_id={config_id}")
+    
     if type_key not in MODEL_TYPES:
         raise ValueError(f"Unknown model type: {type_key}")
 
     _ensure_config_file()
     data = _load_config_file()
     configs = data.get("configs", {}).get(type_key, [])
+    
+    logger.info(f"Found {len(configs)} configs for type_key={type_key}")
+    logger.info(f"Config IDs: {[c.get('id') for c in configs]}")
 
     for i, cfg in enumerate(configs):
         if cfg["id"] == config_id:
+            logger.info(f"Found matching config at index {i}")
             now = datetime.now().isoformat()
             if "display_name" in config_data:
                 cfg["name"] = config_data["display_name"]
@@ -320,7 +328,10 @@ def update_config(type_key: str, config_id: str, config_data: dict) -> Optional[
             cfg["updated_at"] = now
             configs[i] = cfg
             _save_config_file(data)
+            logger.info(f"Config updated successfully")
             return cfg
+    
+    logger.warning(f"Config not found: config_id={config_id}")
     return None
 
 

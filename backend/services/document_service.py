@@ -65,6 +65,9 @@ async def translate_page(page_id: int, target_language: str = "en") -> dict:
     if not elements:
         raise ValueError("当前页面无解析元素")
 
+    for elem in elements:
+        await db.update_element(elem["id"], translated_content="")
+
     results = translate_page_content(elements, target_language)
     for item in results:
         await db.update_element(item["element_id"], translated_content=item["translated_content"])
@@ -80,6 +83,13 @@ async def translate_document(doc_id: int, target_language: str = "en") -> dict:
         raise ValueError("Document not found")
 
     pages = await db.get_pages(doc_id)
+    
+    for page in pages:
+        elements = await db.get_elements(page["id"])
+        if elements:
+            for elem in elements:
+                await db.update_element(elem["id"], translated_content="")
+    
     total_translated = 0
     page_results = []
 

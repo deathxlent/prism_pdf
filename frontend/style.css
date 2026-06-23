@@ -2621,3 +2621,45 @@ textarea.form-control {
     font-size: 0.85rem;
     color: var(--text-secondary);
 }
+
+.loading-toast {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(0, 0, 0, 0.85);
+    color: white;
+    padding: 24px 32px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    z-index: 100000;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+    font-size: 16px;
+    min-width: 200px;
+    justify-content: center;
+}
+
+.loading-toast.hidden {
+    display: none !important;
+}
+
+.loading-spinner {
+    width: 24px;
+    height: 24px;
+    border: 3px solid rgba(255, 255, 255, 0.3);
+    border-top-color: white;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    flex-shrink: 0;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+.loading-message {
+    font-weight: 500;
+    white-space: nowrap;
+}

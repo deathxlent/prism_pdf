@@ -126,25 +126,37 @@ async def describe_image_element(element_id: int) -> dict:
 async def translate_element(element_id: int, target_language: str = "en") -> dict:
     from backend.services.llm_service import translate_text
 
-    element = await db.get_element(element_id)
-    if not element:
-        raise ValueError("Element not found")
+    try:
+        element = await db.get_element(element_id)
+        if not element:
+            raise ValueError("Element not found")
 
-    etype = element.get("element_type", "")
-    content = element.get("content", "") or ""
-    image_desc = element.get("image_description", "") or ""
+        etype = element.get("element_type", "")
+        header_footer_mark = element.get("header_footer_mark")
+        
+        if etype in ("Page-header", "Page-footer"):
+            raise ValueError("页眉页脚元素不参与翻译")
+        if header_footer_mark in ("header", "footer"):
+            raise ValueError("页眉页脚区域的元素不参与翻译")
+        
+        content = element.get("content", "") or ""
+        image_desc = element.get("image_description", "") or ""
 
-    text_to_translate = ""
-    if etype == "Picture":
-        if image_desc:
-            text_to_translate = image_desc
+        text_to_translate = ""
+        if etype == "Picture":
+            if image_desc:
+                text_to_translate = image_desc
+            else:
+                raise ValueError("图片元素无描述，请先生成图片描述")
         else:
-            raise ValueError("图片元素无描述，请先生成图片描述")
-    else:
-        if not content.strip():
-            raise ValueError("元素内容为空，无法翻译")
-        text_to_translate = content
+            if not content.strip():
+                raise ValueError("元素内容为空，无法翻译")
+            text_to_translate = content
 
-    translated = translate_text(text_to_translate, target_language)
-    await db.update_element(element_id, translated_content=translated)
-    return {"element_id": element_id, "translated_content": translated}
+        await db.update_element(element_id, translated_content="")
+        translated = translate_text(text_to_translate, target_language)
+        await db.update_element(element_id, translated_content=translated)
+        return {"element_id": element_id, "translated_content": translated}
+    except Exception as e:
+        logger.error(f"翻译元素 {element_id} 失败: {type(e).__name__}: {e}")
+        raise ValueError(f"翻译失败: {type(e).__name__}: {e}")

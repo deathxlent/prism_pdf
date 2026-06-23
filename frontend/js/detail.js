@@ -224,11 +224,14 @@ async function reparseDocument() {
     if (!currentDocId) return;
     if (!confirm('确定要重新解析此文档吗？这将清除现有解析结果。')) return;
     
+    showLoading('正在启动重新解析...');
     try {
         await apiReparseDocument(currentDocId);
+        hideLoading();
         alert('重解析已开始，请稍候...');
         startProgressPolling(currentDocId);
     } catch (e) {
+        hideLoading();
         alert('启动重解析失败: ' + e.message);
     }
 }

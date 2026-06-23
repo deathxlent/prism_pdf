@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PDF 高精度解析系统</title>
-    <link rel="stylesheet" href="/static/style.css?v=2026061801">
+    <link rel="stylesheet" href="/static/style.css?v=2026062301">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
 <body>
@@ -491,6 +491,11 @@
             </div>
             <button class="language-select-cancel" onclick="cancelLanguageSelect()">取消</button>
         </div>
+    </div>
+
+    <div id="loading-toast" class="loading-toast hidden">
+        <div class="loading-spinner"></div>
+        <div class="loading-message" id="loading-message">处理中...</div>
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>

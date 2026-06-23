@@ -188,7 +188,10 @@ function openCreateConfigModal() {
 function editConfig(configId, typeKey) {
     const configs = llmConfigsData[typeKey] || [];
     const config = configs.find(c => c.id === configId);
-    if (!config) return;
+    if (!config) {
+        alert('配置未找到，请刷新页面重试');
+        return;
+    }
     
     llmEditingConfigId = configId;
     llmCurrentType = typeKey;
@@ -196,8 +199,10 @@ function editConfig(configId, typeKey) {
     $('#llm-config-modal-title').textContent = '编辑配置';
     $('#llm-config-name').value = config.display_name || config.name || '';
     const typeSelect = $('#llm-config-type');
-    typeSelect.value = typeKey;
-    typeSelect.disabled = true;
+    if (typeSelect) {
+        typeSelect.value = typeKey;
+        typeSelect.disabled = true;
+    }
     $('#llm-config-base-url').value = config.base_url || '';
     $('#llm-config-api-key').value = config.api_key || '';
     $('#llm-config-model').value = config.model || '';
@@ -206,7 +211,23 @@ function editConfig(configId, typeKey) {
     $('#llm-config-supports-vision').checked = config.supports_vision || false;
     
     updateConfigFormFields(typeKey);
-    $('#llm-config-modal').classList.remove('hidden');
+    
+    const modal = $('#llm-config-modal');
+    if (modal) {
+        modal.classList.remove('hidden');
+        document.body.appendChild(modal);
+        
+        // 使用 setProperty 来强制设置样式，使用 !important 确保不被CSS覆盖
+        modal.style.setProperty('z-index', '999999', 'important');
+        modal.style.setProperty('position', 'fixed', 'important');
+        modal.style.setProperty('top', '0', 'important');
+        modal.style.setProperty('left', '0', 'important');
+        modal.style.setProperty('width', '100vw', 'important');
+        modal.style.setProperty('height', '100vh', 'important');
+        modal.style.setProperty('display', 'flex', 'important');
+        modal.style.setProperty('align-items', 'center', 'important');
+        modal.style.setProperty('justify-content', 'center', 'important');
+    }
 }
 
 function updateConfigFormFields(typeKey) {
@@ -272,7 +293,13 @@ function onLlmConfigTypeChange() {
 }
 
 async function saveLlmConfig() {
-    const typeKey = $('#llm-config-type').value;
+    let typeKey = $('#llm-config-type').value;
+    
+    // 如果是编辑模式，使用 llmCurrentType
+    if (llmEditingConfigId && llmCurrentType) {
+        typeKey = llmCurrentType;
+    }
+    
     const name = $('#llm-config-name').value.trim();
     const baseUrl = $('#llm-config-base-url').value.trim();
     const apiKey = $('#llm-config-api-key').value.trim();
@@ -329,7 +356,11 @@ async function saveLlmConfig() {
 }
 
 function closeLlmConfigModal() {
-    $('#llm-config-modal').classList.add('hidden');
+    const modal = $('#llm-config-modal');
+    if (modal) {
+        modal.classList.add('hidden');
+        modal.style.setProperty('display', 'none', 'important');
+    }
     const typeSelect = $('#llm-config-type');
     if (typeSelect) typeSelect.disabled = false;
     llmEditingConfigId = null;

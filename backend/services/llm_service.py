@@ -428,6 +428,10 @@ def describe_image_silent(image_path: str) -> str | None:
 
 
 def translate_text(text: str, target_language: str) -> str:
+    cfg = _get_active_llm()
+    if not cfg:
+        raise ValueError("未配置大模型，请先在系统管理中配置并激活一个 LLM")
+    
     lang_names = {"en": "英语", "zh": "中文", "ja": "日语"}
     lang_display = lang_names.get(target_language, target_language)
 
@@ -456,22 +460,36 @@ def translate_page_content(elements: list[dict], target_language: str) -> list[d
     parts = []
     elem_map = []
     for i, elem in enumerate(elements):
+        etype = elem.get("element_type", "")
+        
+        # 跳过页眉页脚元素
+        if etype in ("Page-header", "Page-footer"):
+            continue
+        if elem.get("header_footer_mark") in ("header", "footer"):
+            continue
+        
         content = elem.get("content", "") or ""
         image_desc = elem.get("image_description", "") or ""
-        etype = elem.get("element_type", "")
 
-        if etype == "Picture" and image_desc:
-            parts.append(f"[{i}] [图片描述] {image_desc}")
+        if etype == "Picture":
+            if image_desc:
+                parts.append(f"[{i}] [图片描述] {image_desc}")
+            else:
+                parts.append(f"[{i}] [图片描述] 无描述")
             elem_map.append(i)
-        elif content.strip() and etype != "Picture":
-            parts.append(f"[{i}] {content}")
+        elif etype != "Picture":
+            if content.strip():
+                parts.append(f"[{i}] {content}")
+            else:
+                parts.append(f"[{i}] 无内容")
             elem_map.append(i)
 
     if not parts:
         return []
 
-    combined = "\n<hr/>\n".join(parts)
-    logger.info(f"翻译页面: {len(parts)} 个解析项, 合并后文本长度: {len(combined)} 字符")
+    separator = "<|ITEM_SEPARATOR|>"
+    combined = f"\n{separator}\n".join(parts)
+    logger.info(f"翻译页面: {len(parts)} 个解析项 (跳过页眉页脚), 合并后文本长度: {len(combined)} 字符")
 
     messages = [
         {
@@ -480,10 +498,10 @@ def translate_page_content(elements: list[dict], target_language: str) -> list[d
 
 重要规则：
 1. 文本由多个解析项组成，每项格式为 [序号] 内容
-2. 项与项之间用 <hr/> 分隔
+2. 项与项之间用 {separator} 分隔
 3. 请严格按照相同的格式输出翻译结果：
    - 保留原来的 [序号] 标记，序号不能改变
-   - 项与项之间仍然用 <hr/> 分隔
+   - 项与项之间仍然用 {separator} 分隔
    - 对于 [图片描述] 标签，翻译时保留 [图片描述] 只翻译后面的内容
 4. 只输出翻译结果，不要任何解释、注释或额外文字
 5. 最终答案必须严格遵守格式，确保序号和分隔符完整""",
@@ -503,19 +521,25 @@ def translate_page_content(elements: list[dict], target_language: str) -> list[d
         image_desc = elem.get("image_description", "") or ""
         etype = elem.get("element_type", "")
 
-        if pos in translated_items:
-            translated = translated_items[pos]
+        if i in translated_items:
+            translated = translated_items[i]
             if etype == "Picture":
                 prefix = "[图片描述]"
                 if translated.startswith(prefix):
                     translated = translated[len(prefix):].strip()
                 elif translated.startswith("【图片描述】"):
                     translated = translated[len("【图片描述】"):].strip()
+                elif translated == "无描述":
+                    translated = ""
+            elif translated == "无内容":
+                translated = ""
             results.append({"element_id": elem["id"], "translated_content": translated})
         elif etype == "Picture" and image_desc:
             results.append({"element_id": elem["id"], "translated_content": image_desc})
         elif content.strip() and etype != "Picture":
             results.append({"element_id": elem["id"], "translated_content": content})
+        else:
+            results.append({"element_id": elem["id"], "translated_content": ""})
 
     return results
 
@@ -525,7 +549,8 @@ def _parse_translated_result(text: str, expected_count: int = 0) -> dict[int, st
     if not text:
         return items
 
-    segments = re.split(r'<hr\s*/?>', text, flags=re.IGNORECASE)
+    separator = "<|ITEM_SEPARATOR|>"
+    segments = text.split(separator)
 
     for segment in segments:
         segment = segment.strip()

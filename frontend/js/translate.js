@@ -32,6 +32,7 @@ function cancelLanguageSelect() {
 }
 
 async function translateElement(elementId, targetLanguage) {
+    showLoading('正在翻译中...');
     try {
         const result = await fetchWithTimeout(
             API + '/api/elements/' + elementId + '/translate',
@@ -54,8 +55,10 @@ async function translateElement(elementId, targetLanguage) {
             currentElements[idx].translated_content = data.translated_content;
         }
         renderElements();
+        hideLoading();
         alert('翻译完成');
     } catch (e) {
+        hideLoading();
         if (e.message === 'timeout') {
             alert('翻译请求超时，请稍后重试');
         } else {
@@ -67,6 +70,7 @@ async function translateElement(elementId, targetLanguage) {
 async function translatePage(targetLanguage) {
     if (!currentPageData) return;
     
+    showLoading('正在翻译整页内容，请稍候...');
     try {
         const result = await fetchWithTimeout(
             API + '/api/pages/' + currentPageData.id + '/translate',
@@ -84,17 +88,19 @@ async function translatePage(targetLanguage) {
         }
 
         const data = await result.json();
-        if (data.translated_elements) {
-            for (const elem of data.translated_elements) {
-                const idx = currentElements.findIndex(e => e.id === elem.id);
+        if (data.results) {
+            for (const item of data.results) {
+                const idx = currentElements.findIndex(e => e.id === item.element_id);
                 if (idx !== -1) {
-                    currentElements[idx].translated_content = elem.translated_content;
+                    currentElements[idx].translated_content = item.translated_content;
                 }
             }
         }
         renderElements();
+        hideLoading();
         alert('整页翻译完成');
     } catch (e) {
+        hideLoading();
         if (e.message === 'timeout') {
             alert('翻译请求超时，请稍后重试');
         } else {
@@ -106,6 +112,7 @@ async function translatePage(targetLanguage) {
 async function translateDocument(docId, targetLanguage) {
     if (!confirm('确定要翻译整个文档吗？这可能需要较长时间。')) return;
     
+    showLoading('正在翻译整个文档，这可能需要几分钟...');
     try {
         const result = await fetchWithTimeout(
             API + '/api/documents/' + docId + '/translate',
@@ -122,12 +129,14 @@ async function translateDocument(docId, targetLanguage) {
             throw new Error(err.detail || '翻译失败');
         }
 
+        hideLoading();
         alert('文档翻译已完成');
         if (currentDocId === docId) {
             loadPage(currentPageIndex);
             updateExportDropdownVisibility();
         }
     } catch (e) {
+        hideLoading();
         if (e.message === 'timeout') {
             alert('翻译请求超时，请稍后重试');
         } else {

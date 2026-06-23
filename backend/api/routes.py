@@ -805,38 +805,50 @@ async def describe_image_element_route(element_id: int):
 
 @router.post("/elements/{element_id}/translate")
 async def translate_element(element_id: int, data: dict):
-    from backend.services.llm_service import translate_text
-
-    element = await db.get_element(element_id)
-    if not element:
-        raise HTTPException(status_code=404, detail="Element not found")
-
-    target_language = data.get("target_language", "en")
-    etype = element.get("element_type", "")
-    content = element.get("content", "") or ""
-    image_desc = element.get("image_description", "") or ""
-
-    text_to_translate = ""
-    if etype == "Picture":
-        if image_desc:
-            text_to_translate = image_desc
-        else:
-            raise HTTPException(status_code=400, detail="图片元素无描述，请先生成图片描述")
-    else:
-        if not content.strip():
-            raise HTTPException(status_code=400, detail="元素内容为空，无法翻译")
-        text_to_translate = content
-
+    """翻译单个解析项"""
     try:
+        from backend.services.llm_service import translate_text
+        from fastapi.responses import JSONResponse
+        import logging
+        logger = logging.getLogger(__name__)
+
+        element = await db.get_element(element_id)
+        if not element:
+            return JSONResponse(content={"error": "Element not found"}, status_code=404)
+
+        etype = element.get("element_type", "")
+        header_footer_mark = element.get("header_footer_mark")
+        
+        # 页眉页脚元素不参与翻译
+        if etype in ("Page-header", "Page-footer"):
+            return JSONResponse(content={"error": "页眉页脚元素不参与翻译"}, status_code=400)
+        if header_footer_mark in ("header", "footer"):
+            return JSONResponse(content={"error": "页眉页脚区域的元素不参与翻译"}, status_code=400)
+
+        target_language = data.get("target_language", "en")
+        content = element.get("content", "") or ""
+        image_desc = element.get("image_description", "") or ""
+
+        text_to_translate = ""
+        if etype == "Picture":
+            if image_desc:
+                text_to_translate = image_desc
+            else:
+                return JSONResponse(content={"error": "图片元素无描述，请先生成图片描述"}, status_code=400)
+        else:
+            if not content.strip():
+                return JSONResponse(content={"error": "元素内容为空，无法翻译"}, status_code=400)
+            text_to_translate = content
+
         translated = translate_text(text_to_translate, target_language)
+        await db.update_element(element_id, translated_content=translated)
+
+        return JSONResponse(content={"element_id": element_id, "translated_content": translated}, status_code=200)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        return JSONResponse(content={"error": str(e)}, status_code=400)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"翻译失败: {str(e)}")
-
-    await db.update_element(element_id, translated_content=translated)
-
-    return {"element_id": element_id, "translated_content": translated}
+        logger.error(f"翻译元素 {element_id} 失败: {type(e).__name__}: {e}")
+        return JSONResponse(content={"error": f"翻译失败: {type(e).__name__}: {e}"}, status_code=500)
 
 
 @router.post("/pages/{page_id}/translate")

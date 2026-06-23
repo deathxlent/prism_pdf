@@ -125,3 +125,19 @@ function togglePasswordVisibility(inputId, btn) {
         icon.classList.add('fa-eye');
     }
 }
+
+function showLoading(message) {
+    const toast = $('#loading-toast');
+    const msgEl = $('#loading-message');
+    if (toast && msgEl) {
+        msgEl.textContent = message || '处理中...';
+        toast.classList.remove('hidden');
+    }
+}
+
+function hideLoading() {
+    const toast = $('#loading-toast');
+    if (toast) {
+        toast.classList.add('hidden');
+    }
+}
