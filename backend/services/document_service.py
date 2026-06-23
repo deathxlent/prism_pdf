@@ -25,7 +25,9 @@ async def delete_document(doc_id: int) -> None:
     await db.delete_document(doc_id)
 
 
-async def reparse_document(doc_id: int) -> None:
+async def reparse_document(doc_id: int) -> dict:
+    """重解析文档：删除所有旧产物和数据，返回原PDF路径"""
+    import shutil
     doc = await db.get_document(doc_id)
     if not doc:
         raise ValueError("Document not found")
@@ -33,12 +35,23 @@ async def reparse_document(doc_id: int) -> None:
     if doc["status"] == "processing":
         raise RuntimeError("Document is already processing")
 
+    file_path = doc["file_path"]
+    doc_dir = str(Path(file_path).parent / Path(file_path).stem)
+
+    if Path(doc_dir).exists():
+        shutil.rmtree(doc_dir, ignore_errors=True)
+
     await db.execute_query(
         "DELETE FROM page_elements WHERE page_id IN (SELECT id FROM pdf_pages WHERE document_id = ?)",
         (doc_id,)
     )
     await db.execute_query("DELETE FROM pdf_pages WHERE document_id = ?", (doc_id,))
     await db.update_document(doc_id, status="uploaded", error_message=None)
+
+    return {
+        "file_path": file_path,
+        "original_filename": doc["original_filename"],
+    }
 
 
 async def translate_page(page_id: int, target_language: str = "en") -> dict:

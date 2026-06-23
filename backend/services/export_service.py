@@ -328,7 +328,7 @@ def build_markdown(pages: list[dict]) -> str:
     return "\n".join(parts)
 
 
-def generate_rag_single_html(pages: list, doc: dict) -> str:
+def generate_rag_single_html(pages: list, doc: dict, use_translated: bool = False) -> str:
     filtered_pages = []
     for page in pages:
         filtered_elements = _filter_rag_elements(page.get("elements", []))
@@ -336,15 +336,15 @@ def generate_rag_single_html(pages: list, doc: dict) -> str:
         page_copy["elements"] = filtered_elements
         filtered_pages.append(page_copy)
 
-    return generate_document_html(filtered_pages, doc)
+    return generate_document_html(filtered_pages, doc, use_translated=use_translated)
 
 
-def generate_rag_single_page_html(page: dict, doc: dict, elements: list) -> str:
+def generate_rag_single_page_html(page: dict, doc: dict, elements: list, use_translated: bool = False) -> str:
     filtered_elements = _filter_rag_elements(elements)
-    return generate_page_html(page, doc, filtered_elements)
+    return generate_page_html(page, doc, filtered_elements, use_translated=use_translated)
 
 
-def generate_rag_per_page_zip(pages: list, doc: dict, pages_elements: dict) -> bytes:
+def generate_rag_per_page_zip(pages: list, doc: dict, pages_elements: dict, use_translated: bool = False) -> bytes:
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
         for page in pages:
@@ -356,7 +356,7 @@ def generate_rag_per_page_zip(pages: list, doc: dict, pages_elements: dict) -> b
             filtered_elements = _filter_rag_elements(elements)
             if not filtered_elements:
                 continue
-            html_content = generate_page_html(page, doc, filtered_elements)
+            html_content = generate_page_html(page, doc, filtered_elements, use_translated=use_translated)
             page_num_str = str(page["page_number"]).zfill(3)
             filename = f"page_{page_num_str}.html"
             zf.writestr(filename, html_content)

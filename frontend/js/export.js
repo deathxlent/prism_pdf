@@ -182,6 +182,24 @@ async function exportCurrentPageRagHtml() {
     }
 }
 
+async function exportCurrentPageTranslatedRagHtml() {
+    if (!currentPageData) return;
+    
+    try {
+        const res = await fetch(`${API}/api/pages/${currentPageData.id}/export/translated-rag-html`);
+        if (!res.ok) throw new Error('Export failed');
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `page_${currentPageData.page_number}_译文_RAG友好.html`;
+        a.click();
+        URL.revokeObjectURL(url);
+    } catch (e) {
+        alert('导出失败: ' + e.message);
+    }
+}
+
 async function exportDocumentTranslatedHtml(docId = null) {
     const id = docId || currentDocId;
     if (!id) return;
@@ -295,4 +313,123 @@ async function exportRagHtml(docId, keepPageNumbers) {
     } catch (e) {
         alert('导出失败: ' + e.message);
     }
+}
+
+async function exportDocumentTranslatedRagHtml(docId = null) {
+    const id = docId || currentDocId;
+    if (!id) return;
+    try {
+        const res = await fetch(`${API}/api/documents/${id}/export/translated/rag-html`);
+        if (!res.ok) throw new Error('Export failed');
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `document_${id}_译文_RAG友好.html`;
+        a.click();
+        URL.revokeObjectURL(url);
+    } catch (e) {
+        alert('导出失败: ' + e.message);
+    }
+}
+
+async function exportDocumentTranslatedRagHtmlZip(docId = null) {
+    const id = docId || currentDocId;
+    if (!id) return;
+    try {
+        const res = await fetch(`${API}/api/documents/${id}/export/translated/rag-html-zip`);
+        if (!res.ok) throw new Error('Export failed');
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `document_${id}_译文_RAG友好_按页.zip`;
+        a.click();
+        URL.revokeObjectURL(url);
+    } catch (e) {
+        alert('导出失败: ' + e.message);
+    }
+}
+
+async function checkHasTranslated(docId) {
+    if (!docId) return false;
+    try {
+        const res = await fetch(`${API}/api/documents/${docId}/translated/count`);
+        if (!res.ok) return false;
+        const data = await res.json();
+        return (data.count || 0) > 0;
+    } catch (e) {
+        return false;
+    }
+}
+
+function applyTranslatedVisibility(dropdown, showTranslated) {
+    let inTranslated = false;
+    let inTranslatedRag = false;
+
+    const children = dropdown.children;
+    for (let i = 0; i < children.length; i++) {
+        const child = children[i];
+        if (child.classList.contains('dropdown-section-title')) {
+            const title = child.textContent.trim();
+            inTranslated = (title === '译文');
+            inTranslatedRag = (title === '译文 RAG 友好');
+            continue;
+        }
+        if (child.classList.contains('dropdown-divider')) {
+            continue;
+        }
+        if (inTranslated || inTranslatedRag) {
+            if (showTranslated) {
+                child.style.display = '';
+                child.classList.remove('dropdown-item-disabled');
+                child.removeAttribute('disabled');
+            } else {
+                child.style.display = '';
+                child.classList.add('dropdown-item-disabled');
+                child.setAttribute('disabled', 'true');
+            }
+        }
+    }
+
+    const dividers = dropdown.querySelectorAll('.dropdown-divider');
+    dividers.forEach(divider => {
+        let prevHasContent = false;
+        let nextHasContent = false;
+        let prev = divider.previousElementSibling;
+        let next = divider.nextElementSibling;
+        while (prev && prev.classList.contains('dropdown-divider')) {
+            prev = prev.previousElementSibling;
+        }
+        while (next && next.classList.contains('dropdown-divider')) {
+            next = next.nextElementSibling;
+        }
+        if (prev) {
+            prevHasContent = prev.style.display !== 'none' && !prev.classList.contains('dropdown-divider');
+        }
+        if (next) {
+            nextHasContent = next.style.display !== 'none' && !next.classList.contains('dropdown-divider');
+        }
+        divider.style.display = (prevHasContent && nextHasContent) ? '' : 'none';
+    });
+}
+
+async function updateExportDropdownVisibility(docId) {
+    const detailDropdown = $('#detail-export-dropdown');
+    if (detailDropdown) {
+        const hasAny = await checkHasTranslated(docId || currentDocId);
+        applyTranslatedVisibility(detailDropdown, hasAny);
+    }
+    const pageDropdown = $('#page-export-dropdown');
+    if (pageDropdown) {
+        const hasAny = await checkHasTranslated(docId || currentDocId);
+        applyTranslatedVisibility(pageDropdown, hasAny);
+    }
+}
+
+async function updateListExportDropdownVisibility(docId, dropdownId) {
+    const dropdown = document.getElementById(dropdownId);
+    if (!dropdown) return;
+    const hasAny = await checkHasTranslated(docId);
+    applyTranslatedVisibility(dropdown, hasAny);
 }

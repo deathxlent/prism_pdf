@@ -661,14 +661,15 @@ async def mark_header_footer(page_id: int):
     marked_count = 0
     for elem in elements:
         etype_lower = (elem.get("element_type") or "").lower()
-        if etype_lower in HEADER_TYPES or etype_lower in FOOTER_TYPES:
-            continue
-
         y0 = elem.get("bbox_y0", 0)
         y1 = elem.get("bbox_y1", 0)
         mark = None
 
-        if header_y_threshold is not None and y0 < header_y_threshold:
+        if etype_lower in HEADER_TYPES:
+            mark = "header"
+        elif etype_lower in FOOTER_TYPES:
+            mark = "footer"
+        elif header_y_threshold is not None and y0 < header_y_threshold:
             mark = "header"
         elif footer_y_threshold is not None and y1 > footer_y_threshold:
             mark = "footer"

@@ -49,13 +49,20 @@ async def _describe_images_for_document(doc_id: int):
 
     if not picture_elements:
         logger.info(f"Doc {doc_id}: No pictures need description")
+        set_parse_progress(doc_id, "describing_images", 100, "无需生成图片描述")
         return
 
     logger.info(f"Doc {doc_id}: Starting image description for {len(picture_elements)} pictures")
+    set_parse_progress(doc_id, "describing_images", 0, f"准备生成 {len(picture_elements)} 张图片描述")
+    
     described = 0
-    for elem in picture_elements:
+    for idx, elem in enumerate(picture_elements):
         try:
             image_path = elem["content"]
+            progress_pct = ((idx + 1) / len(picture_elements)) * 100
+            set_parse_progress(doc_id, "describing_images", progress_pct, 
+                              f"正在生成图片描述 ({idx + 1}/{len(picture_elements)})")
+            
             desc = await asyncio.to_thread(describe_image_silent, image_path)
             if desc:
                 await db.update_element(elem["id"], image_description=desc)
@@ -64,6 +71,7 @@ async def _describe_images_for_document(doc_id: int):
         except Exception as e:
             logger.debug(f"Image description failed for element {elem['id']}: {e}")
 
+    set_parse_progress(doc_id, "describing_images", 100, f"图片描述生成完成 ({described}/{len(picture_elements)})")
     logger.info(f"Doc {doc_id}: Image description completed: {described}/{len(picture_elements)}")
 
 

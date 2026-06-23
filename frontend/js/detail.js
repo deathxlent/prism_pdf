@@ -2,10 +2,13 @@ async function loadDocumentDetail(docId) {
     currentDocId = docId;
 
     try {
-        const [docRes, statusRes] = await Promise.all([
+        const [docRes, statusRes, llmRes] = await Promise.all([
             apiGetResults(docId),
-            apiGetStatus(docId)
+            apiGetStatus(docId),
+            getLlmActiveConfig().catch(() => null)
         ]);
+
+        activeLlmConfig = llmRes;
 
         currentDocument = docRes.document;
         currentPages = docRes.pages || [];
@@ -27,6 +30,7 @@ async function loadDocumentDetail(docId) {
         }
 
         updateLlmButtons();
+        updateExportDropdownVisibility();
         renderThumbnails();
 
         if (currentPages.length > 0) {
@@ -238,7 +242,7 @@ function backToDocuments() {
     navigateTo('home');
 }
 
-function toggleDetailExportDropdown(event) {
+async function toggleDetailExportDropdown(event) {
     event.stopPropagation();
     const dropdown = document.getElementById('detail-export-dropdown');
     
@@ -248,10 +252,11 @@ function toggleDetailExportDropdown(event) {
         }
     });
     
+    await updateExportDropdownVisibility();
     dropdown.classList.toggle('show');
 }
 
-function togglePageExportDropdown(event) {
+async function togglePageExportDropdown(event) {
     event.stopPropagation();
     const dropdown = document.getElementById('page-export-dropdown');
     
@@ -261,5 +266,6 @@ function togglePageExportDropdown(event) {
         }
     });
     
+    await updateExportDropdownVisibility();
     dropdown.classList.toggle('show');
 }

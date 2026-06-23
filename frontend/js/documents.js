@@ -134,7 +134,7 @@ function renderDocumentsList(docs) {
                         <td class="doc-time">${doc.status === 'completed' ? formatDateTime(doc.updated_at) : '-'}</td>
                         <td>${getResultText(doc.status)}</td>
                         <td class="doc-actions">
-                            ${doc.status !== 'processing' && !doc.status.startsWith('parsing') ? 
+                            ${doc.status !== 'processing' && !doc.status.startsWith('parsing') && doc.status !== 'completed' ? 
                                 `<button class="btn btn-primary btn-sm" onclick="event.stopPropagation(); startParsing(${doc.id})">
                                     <i class="fas fa-play"></i> 解析
                                 </button>` : ''}
@@ -181,6 +181,14 @@ function renderDocumentsList(docs) {
                                         </button>
                                         <button class="dropdown-item" onclick="exportDocumentRagHtmlZip(${doc.id})">
                                             <i class="fas fa-file-archive"></i> RAG 友好分页格式
+                                        </button>
+                                        <div class="dropdown-divider"></div>
+                                        <div class="dropdown-section-title">译文 RAG 友好</div>
+                                        <button class="dropdown-item" onclick="exportDocumentTranslatedRagHtml(${doc.id})">
+                                            <i class="fas fa-magic"></i> 译文 RAG 友好格式
+                                        </button>
+                                        <button class="dropdown-item" onclick="exportDocumentTranslatedRagHtmlZip(${doc.id})">
+                                            <i class="fas fa-file-archive"></i> 译文 RAG 友好分页格式
                                         </button>
                                     </div>
                                 </div>` : ''}
@@ -263,7 +271,7 @@ function viewDocument(docId) {
     navigateTo(`detail/${docId}`);
 }
 
-function toggleExportDropdown(docId, event) {
+async function toggleExportDropdown(docId, event) {
     event.stopPropagation();
     const dropdown = document.getElementById(`export-dropdown-${docId}`);
     
@@ -273,6 +281,7 @@ function toggleExportDropdown(docId, event) {
         }
     });
     
+    await updateListExportDropdownVisibility(docId, `export-dropdown-${docId}`);
     dropdown.classList.toggle('show');
 }
 

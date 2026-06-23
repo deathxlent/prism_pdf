@@ -74,14 +74,14 @@ def parse_html_table_to_matrix(html: str) -> list[list[dict]]:
     temp_matrix = []
     max_cols = 0
     for row_html in rows_match:
-        cells_match = re.findall(r'<(t[dh])[^>]*>(.*?)</\1>', row_html, re.DOTALL | re.IGNORECASE)
+        cells_match = re.findall(r'<(t[dh])([^>]*)>(.*?)</\1>', row_html, re.DOTALL | re.IGNORECASE)
         row_cells = []
-        for tag, cell_html in cells_match:
+        for tag, attrs, cell_html in cells_match:
             tag = tag.lower()
             is_header = tag == 'th'
-            rs_match = re.search(r"rowspan\s*=\s*['\"]?(\d+)", cell_html, re.IGNORECASE)
+            rs_match = re.search(r"rowspan\s*=\s*['\"]?(\d+)", attrs, re.IGNORECASE)
             rowspan = int(rs_match.group(1)) if rs_match else 1
-            cs_match = re.search(r"colspan\s*=\s*['\"]?(\d+)", cell_html, re.IGNORECASE)
+            cs_match = re.search(r"colspan\s*=\s*['\"]?(\d+)", attrs, re.IGNORECASE)
             colspan = int(cs_match.group(1)) if cs_match else 1
             content = re.sub(r'<[^>]+>', '', cell_html).strip()
             content = unescape(content)
@@ -138,14 +138,14 @@ def parse_html_table(html: str) -> list[list[dict]]:
     max_cols = 0
 
     for ri, row_html in enumerate(rows_match):
-        cells_match = re.findall(r'<(t[dh])[^>]*>(.*?)</\1>', row_html, re.DOTALL | re.IGNORECASE)
+        cells_match = re.findall(r'<(t[dh])([^>]*)>(.*?)</\1>', row_html, re.DOTALL | re.IGNORECASE)
         row_cells = []
-        for tag, cell_html in cells_match:
+        for tag, attrs, cell_html in cells_match:
             tag = tag.lower()
             is_header = tag == 'th'
-            rs_match = re.search(r"rowspan\s*=\s*['\"]?(\d+)", cell_html, re.IGNORECASE)
+            rs_match = re.search(r"rowspan\s*=\s*['\"]?(\d+)", attrs, re.IGNORECASE)
             rowspan = int(rs_match.group(1)) if rs_match else 1
-            cs_match = re.search(r"colspan\s*=\s*['\"]?(\d+)", cell_html, re.IGNORECASE)
+            cs_match = re.search(r"colspan\s*=\s*['\"]?(\d+)", attrs, re.IGNORECASE)
             colspan = int(cs_match.group(1)) if cs_match else 1
             content = re.sub(r'<[^>]+>', '', cell_html).strip()
             content = unescape(content)
@@ -318,15 +318,39 @@ def merge_cross_page_empty_cells(prev_html: str, curr_html: str) -> tuple[str, s
             first_non_empty_col = ci
             break
 
-    new_prev_matrix = [row[:] for row in prev_matrix]
+    # 检查当前页第二行是否有跨行单元格覆盖第一行的空单元格
+    # 如果有，则这些空单元格不应该合并到上一页
+    empty_cols_to_merge = []
     for ci in empty_cols_in_first_row:
+        # 检查当前页第二行（row_idx=1）是否有rowspan>1的单元格覆盖此列
+        should_merge = True
+        if curr_rows > 1 and ci < len(curr_matrix[1]):
+            cell_in_row2 = curr_matrix[1][ci]
+            if cell_in_row2 is not None and cell_in_row2.get('rowspan', 1) > 1:
+                # 第二行有跨行单元格覆盖此列，说明此空单元格属于当前页的跨行单元格
+                should_merge = False
+        if should_merge:
+            empty_cols_to_merge.append(ci)
+
+    new_prev_matrix = [row[:] for row in prev_matrix]
+    for ci in empty_cols_to_merge:
+        # 先检查最后一行对应列
         target_ci = ci
-        while target_ci >= 0 and prev_last_row[target_ci] is None:
+        while target_ci >= 0 and (target_ci >= len(prev_last_row) or prev_last_row[target_ci] is None):
             target_ci -= 1
+        
         if target_ci >= 0 and prev_last_row[target_ci]:
+            # 最后一行有对应单元格，增加其rowspan
             if new_prev_matrix[-1][target_ci]:
                 existing_rs = new_prev_matrix[-1][target_ci].get('rowspan', 1)
                 new_prev_matrix[-1][target_ci]['rowspan'] = existing_rs + 1
+        else:
+            # 最后一行对应列是None，向上查找实际的单元格（被rowspan覆盖的情况）
+            for ri in range(prev_rows - 1, -1, -1):
+                if ci < len(new_prev_matrix[ri]) and new_prev_matrix[ri][ci] is not None:
+                    existing_rs = new_prev_matrix[ri][ci].get('rowspan', 1)
+                    new_prev_matrix[ri][ci]['rowspan'] = existing_rs + 1
+                    break
 
     if (empty_cols_in_first_row and first_non_empty_col is not None and first_non_empty_col > 0):
         all_covered_by_colspan = True
@@ -355,6 +379,8 @@ def merge_cross_page_empty_cells(prev_html: str, curr_html: str) -> tuple[str, s
                     if ci < len(new_prev_matrix[-1]):
                         new_prev_matrix[-1][ci] = None
 
+    # 处理当前页：第一行的空单元格如果被当前页第二行的跨行单元格覆盖，
+    # 则需要增加第二行对应单元格的rowspan
     new_curr_matrix = []
     for ri, row in enumerate(curr_matrix):
         if ri == 0:
@@ -364,7 +390,27 @@ def merge_cross_page_empty_cells(prev_html: str, curr_html: str) -> tuple[str, s
                     new_row.append(None)
                     continue
                 if ci in empty_cols_in_first_row:
+                    if ci in empty_cols_to_merge:
+                        # 该空单元格已合并到上一页，当前页第一行移除
+                        new_row.append(None)
+                    else:
+                        # 该空单元格属于当前页跨行单元格，保留
+                        new_row.append(cell.copy() if cell else None)
+                else:
+                    new_row.append(cell.copy() if cell else None)
+            new_curr_matrix.append(new_row)
+        elif ri == 1:
+            # 第二行：增加覆盖第一行空单元格的rowspan
+            new_row = []
+            for ci, cell in enumerate(row):
+                if cell is None:
                     new_row.append(None)
+                    continue
+                if ci in empty_cols_in_first_row and ci not in empty_cols_to_merge:
+                    # 这个单元格覆盖第一行的空单元格，增加rowspan
+                    new_cell = cell.copy()
+                    new_cell['rowspan'] = new_cell.get('rowspan', 1) + 1
+                    new_row.append(new_cell)
                 else:
                     new_row.append(cell.copy() if cell else None)
             new_curr_matrix.append(new_row)
@@ -417,15 +463,33 @@ def build_merged_table(first_html: str, continuation_htmls: list[str]) -> str:
                 if not content:
                     empty_cols.append(ci)
 
-        if empty_cols:
+        # 检查当前页第二行是否有跨行单元格覆盖第一行的空单元格
+        empty_cols_to_merge = []
+        for ci in empty_cols:
+            should_merge = True
+            if len(cont_matrix) > 1 and ci < len(cont_matrix[1]):
+                cell_in_row2 = cont_matrix[1][ci]
+                if cell_in_row2 is not None and cell_in_row2.get('rowspan', 1) > 1:
+                    should_merge = False
+            if should_merge:
+                empty_cols_to_merge.append(ci)
+
+        if empty_cols_to_merge:
             last_acc_row = acc_matrix[-1]
-            for ci in empty_cols:
+            acc_rows = len(acc_matrix)
+            for ci in empty_cols_to_merge:
                 target_ci = ci
                 while target_ci >= 0 and (target_ci >= len(last_acc_row) or last_acc_row[target_ci] is None):
                     target_ci -= 1
                 if target_ci >= 0 and target_ci < len(last_acc_row) and last_acc_row[target_ci] is not None:
                     existing_rs = last_acc_row[target_ci].get('rowspan', 1)
                     last_acc_row[target_ci]['rowspan'] = existing_rs + 1
+                else:
+                    for ri in range(acc_rows - 1, -1, -1):
+                        if ci < len(acc_matrix[ri]) and acc_matrix[ri][ci] is not None:
+                            existing_rs = acc_matrix[ri][ci].get('rowspan', 1)
+                            acc_matrix[ri][ci]['rowspan'] = existing_rs + 1
+                            break
 
             first_non_empty_col = None
             for ci in range(max_cols):
@@ -460,6 +524,8 @@ def build_merged_table(first_html: str, continuation_htmls: list[str]) -> str:
                             if ci < len(last_acc_row):
                                 last_acc_row[ci] = None
 
+        # 处理当前页：第一行的空单元格如果被当前页第二行的跨行单元格覆盖，
+        # 则需要增加第二行对应单元格的rowspan
         new_cont_rows = []
         for ri, row in enumerate(cont_matrix):
             if ri == 0:
@@ -470,12 +536,32 @@ def build_merged_table(first_html: str, continuation_htmls: list[str]) -> str:
                         new_row.append(None)
                         continue
                     if ci in empty_cols:
-                        new_row.append(None)
+                        # 检查是否被第二行的跨行单元格覆盖
+                        if len(cont_matrix) > 1 and ci < len(cont_matrix[1]) and cont_matrix[1][ci] is not None:
+                            # 被第二行的单元格覆盖，第一行设为None
+                            new_row.append(None)
+                        else:
+                            new_row.append(None)
                     else:
                         new_row.append(cell.copy() if cell else None)
                         all_absorbed = False
                 if not all_absorbed:
                     new_cont_rows.append(new_row)
+            elif ri == 1:
+                # 第二行：增加覆盖第一行空单元格的rowspan
+                new_row = []
+                for ci, cell in enumerate(row):
+                    if cell is None:
+                        new_row.append(None)
+                        continue
+                    if ci in empty_cols and ci not in empty_cols_to_merge:
+                        # 这个单元格覆盖第一行的空单元格，增加rowspan
+                        new_cell = cell.copy()
+                        new_cell['rowspan'] = new_cell.get('rowspan', 1) + 1
+                        new_row.append(new_cell)
+                    else:
+                        new_row.append(cell.copy() if cell else None)
+                new_cont_rows.append(new_row)
             else:
                 new_cont_rows.append([c.copy() if c else None for c in row])
 
@@ -509,6 +595,11 @@ def merge_cross_page_tables(pages: list[dict]) -> list[dict]:
         rest_htmls = [(t.get("content", "") or "") for t in rest]
         merged_html = build_merged_table(first_html, rest_htmls)
         first["content"] = merged_html
+        first["is_cross_page_first"] = True
+        first["cross_page_count"] = len(tables)
+        for t in rest:
+            t["is_cross_page_part"] = True
+            t["cross_page_group_id"] = group_id
         merged_groups.add(group_id)
 
     for page in pages:

@@ -389,9 +389,6 @@ def _call_llm_vision(text_prompt: str, image_path: str, max_tokens: int = 1024) 
 
 
 def is_vision_available() -> bool:
-    paddlevl_cfg = get_active_paddlevl_config()
-    if paddlevl_cfg and paddlevl_cfg.get("base_url", "").strip():
-        return True
     cfg = _get_active_llm()
     if cfg and cfg.get("supports_vision"):
         return True
@@ -414,18 +411,10 @@ def describe_image(image_path: str) -> str:
         "- 最终答案要完整清晰"
     )
 
-    paddlevl_cfg = get_active_paddlevl_config()
-    if paddlevl_cfg and paddlevl_cfg.get("base_url", "").strip():
-        try:
-            return _call_paddlevl(prompt, image_path, max_tokens=2048)
-        except Exception as e:
-            logger.warning(f"PaddleVL 调用失败，回退到 LLM Vision: {e}")
-            cfg = _get_active_llm()
-            if cfg and cfg.get("supports_vision"):
-                return _call_llm_vision(prompt, image_path, max_tokens=2048)
-            raise
-
-    return _call_llm_vision(prompt, image_path, max_tokens=2048)
+    cfg = _get_active_llm()
+    if cfg and cfg.get("supports_vision"):
+        return _call_llm_vision(prompt, image_path, max_tokens=2048)
+    raise ValueError("没有可用的 Vision LLM 配置用于图片描述")
 
 
 def describe_image_silent(image_path: str) -> str | None:

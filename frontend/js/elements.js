@@ -15,6 +15,7 @@ function renderElements() {
         const type = elem.element_type.toLowerCase();
         const isImage = elem.content_format === 'image_path';
         const isPicture = elem.element_type === 'Picture';
+        const isHeaderFooter = elem.header_footer_mark === 'header' || elem.header_footer_mark === 'footer';
         let contentHtml = '';
 
         if (isImage && elem.content) {
@@ -37,9 +38,30 @@ function renderElements() {
             translatedHtml = `<div class="element-translated"><i class="fas fa-language"></i> ${escapeHtml(elem.translated_content)}</div>`;
         }
 
+        let headerFooterBadge = '';
+        if (isHeaderFooter) {
+            const badgeText = elem.header_footer_mark === 'header' ? '页眉' : '页脚';
+            headerFooterBadge = `<span class="header-footer-badge" title="被标记为${badgeText}区域"><i class="fas fa-${elem.header_footer_mark === 'header' ? 'arrow-up' : 'arrow-down'}"></i> ${badgeText}</span>`;
+        }
+
+        let crossPageBadge = '';
+        if (elem.element_type === 'Table' && elem.cross_page_group !== undefined && elem.cross_page_group !== null) {
+            const isCrossPageFirst = elem.is_cross_page_first === true;
+            const isCrossPagePart = elem.is_cross_page_part === true;
+            if (isCrossPageFirst) {
+                crossPageBadge = `<span class="cross-page-badge" title="跨页表格（起始页）"><i class="fas fa-table"></i> 跨页表格</span>`;
+            } else if (isCrossPagePart) {
+                crossPageBadge = `<span class="cross-page-badge cross-page-part" title="跨页表格（被合并部分）"><i class="fas fa-table"></i> 跨页续表</span>`;
+            }
+        }
+
         let extraBtns = '';
-        if (isPicture && hasVision) {
+        if (isPicture && hasVision && !isHeaderFooter) {
             extraBtns += `<button class="btn btn-info btn-sm describe-btn" onclick="event.stopPropagation(); describeImage(${elem.id})" title="AI生成图片描述">
+                <i class="fas fa-magic"></i> 描述
+            </button>`;
+        } else if (isPicture && isHeaderFooter) {
+            extraBtns += `<button class="btn btn-info btn-sm describe-btn" disabled title="页眉/页脚图片不参与描述" style="opacity: 0.5; cursor: not-allowed;">
                 <i class="fas fa-magic"></i> 描述
             </button>`;
         }
@@ -50,7 +72,7 @@ function renderElements() {
         }
 
         return `
-            <div class="element-card ${activeElementId === elem.id ? 'active' : ''}" 
+            <div class="element-card ${activeElementId === elem.id ? 'active' : ''} ${isHeaderFooter ? 'header-footer-element' : ''}" 
                  data-element-id="${elem.id}"
                  data-order="${elem.reading_order}"
                  draggable="${isEditOrderMode}"
@@ -66,6 +88,8 @@ function renderElements() {
                     <span class="element-type ${type}">${elem.element_type}</span>
                     <span class="element-order">#${elem.reading_order}</span>
                     <span class="element-confidence">${(elem.confidence * 100).toFixed(1)}%</span>
+                    ${headerFooterBadge}
+                    ${crossPageBadge}
                 </div>
                 <div class="element-content markdown" onclick="highlightElement(${elem.id})">
                     ${contentHtml}
@@ -536,22 +560,4 @@ async function showRawLayoutData() {
 
 function closeRawDataModal() {
     $('#raw-data-modal').classList.add('hidden');
-}
-
-async function showLayoutAnnotationImage() {
-    if (!currentPageData) return;
-
-    try {
-        const imgUrl = `${API}/api/pages/${currentPageData.id}/layout-annotation`;
-        $('#annotation-image').src = imgUrl + '?t=' + Date.now();
-        $('#annotation-image-modal').classList.remove('hidden');
-        closeRawDataModal();
-    } catch (e) {
-        alert('获取标注图片失败: ' + e.message);
-    }
-}
-
-function closeAnnotationImageModal() {
-    $('#annotation-image-modal').classList.add('hidden');
-    $('#annotation-image').src = '';
 }

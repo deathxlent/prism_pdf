@@ -355,6 +355,9 @@ def detect_layout(image_path: str) -> list[dict]:
         x1 = max(0.0, min(x1, orig_w))
         y1 = max(0.0, min(y1, orig_h))
 
+        if y0 < orig_h * 0.07 and element_type.lower() in ("section", "section-header"):
+            element_type = "Page-header"
+
         raw_elem = {
             "element_type": element_type,
             "bbox": (x0, y0, x1, y1),
@@ -419,6 +422,9 @@ def detect_layout_batch(image_paths: list[str]) -> list[list[dict]]:
                 y0 = max(0.0, min(y0, orig_h))
                 x1 = max(0.0, min(x1, orig_w))
                 y1 = max(0.0, min(y1, orig_h))
+
+                if y0 < orig_h * 0.07 and element_type.lower() in ("section", "section-header"):
+                    element_type = "Page-header"
                 
                 raw_elem = {
                     "element_type": element_type,

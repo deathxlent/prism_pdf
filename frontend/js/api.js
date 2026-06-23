@@ -273,10 +273,22 @@ async function getLlmActiveConfig() {
 
 function updateLlmButtons() {
     const hasLlm = !!activeLlmConfig;
-    const hasVision = hasLlm && activeLlmConfig.supports_vision;
 
     const translateBtn = $('#translate-page-btn');
     if (translateBtn) {
-        translateBtn.classList.toggle('hidden', !hasLlm);
+        if (hasLlm) {
+            translateBtn.classList.remove('hidden');
+        } else {
+            translateBtn.classList.add('hidden');
+        }
+    }
+
+    const translateDocBtn = $('#translate-doc-btn');
+    if (translateDocBtn) {
+        if (hasLlm) {
+            translateDocBtn.classList.remove('hidden');
+        } else {
+            translateDocBtn.classList.add('hidden');
+        }
     }
 }

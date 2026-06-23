@@ -837,6 +837,36 @@ body {
     margin-left: auto;
 }
 
+.header-footer-badge {
+    font-size: 0.7rem;
+    padding: 0.15rem 0.5rem;
+    border-radius: 3px;
+    background: #f59e0b;
+    color: white;
+    margin-left: 0.5rem;
+    font-weight: 500;
+}
+
+.cross-page-badge {
+    font-size: 0.7rem;
+    padding: 0.15rem 0.5rem;
+    border-radius: 3px;
+    background: #8b5cf6;
+    color: white;
+    margin-left: 0.5rem;
+    font-weight: 500;
+}
+
+.cross-page-badge.cross-page-part {
+    background: #a78bfa;
+    opacity: 0.85;
+}
+
+.element-card.header-footer-element {
+    opacity: 0.85;
+    border-left: 3px solid #f59e0b;
+}
+
 .element-content {
     padding: 0.875rem;
     font-size: 0.88rem;
@@ -1372,6 +1402,16 @@ textarea.form-control {
     width: 16px;
     text-align: center;
     color: var(--primary);
+}
+
+.dropdown-item-disabled {
+    opacity: 0.4;
+    cursor: not-allowed !important;
+    pointer-events: none;
+}
+
+.dropdown-item-disabled i {
+    color: var(--text-muted);
 }
 
 .dropdown-divider {

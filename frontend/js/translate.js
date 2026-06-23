@@ -125,6 +125,7 @@ async function translateDocument(docId, targetLanguage) {
         alert('文档翻译已完成');
         if (currentDocId === docId) {
             loadPage(currentPageIndex);
+            updateExportDropdownVisibility();
         }
     } catch (e) {
         if (e.message === 'timeout') {

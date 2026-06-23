@@ -123,10 +123,18 @@
                             <button class="dropdown-item" onclick="exportDocumentRagHtmlZip()">
                                 <i class="fas fa-file-archive"></i> RAG 友好分页格式
                             </button>
+                            <div class="dropdown-divider"></div>
+                            <div class="dropdown-section-title">译文 RAG 友好</div>
+                            <button class="dropdown-item" onclick="exportDocumentTranslatedRagHtml()">
+                                <i class="fas fa-magic"></i> 译文 RAG 友好格式
+                            </button>
+                            <button class="dropdown-item" onclick="exportDocumentTranslatedRagHtmlZip()">
+                                <i class="fas fa-file-archive"></i> 译文 RAG 友好分页格式
+                            </button>
                         </div>
                     </div>
-                    <button class="btn btn-info hidden" onclick="showTranslatePageLanguageSelect()" id="translate-page-btn">
-                        <i class="fas fa-language"></i> 翻译当前页
+                    <button class="btn btn-info hidden" onclick="showDocTranslateLanguageSelect(currentDocId)" id="translate-doc-btn">
+                        <i class="fas fa-language"></i> 翻译
                     </button>
                     <button class="btn btn-primary" onclick="reparseDocument()">
                         <i class="fas fa-sync-alt"></i> 重解析
@@ -189,6 +197,11 @@
                                     <button class="dropdown-item" onclick="exportCurrentPageRagHtml()">
                                         <i class="fas fa-magic"></i> RAG 单页友好格式
                                     </button>
+                                    <div class="dropdown-divider"></div>
+                                    <div class="dropdown-section-title">译文 RAG 友好</div>
+                                    <button class="dropdown-item" onclick="exportCurrentPageTranslatedRagHtml()">
+                                        <i class="fas fa-magic"></i> 译文 RAG 单页友好格式
+                                    </button>
                                 </div>
                             </div>
                         </div>
@@ -206,6 +219,9 @@
                         <div class="elements-actions">
                             <button id="add-element-btn" class="btn btn-success btn-sm" onclick="toggleAddElementMode()">
                                 <i class="fas fa-plus"></i> 添加元素
+                            </button>
+                            <button id="translate-page-btn" class="btn btn-info btn-sm hidden" onclick="showTranslatePageLanguageSelect()">
+                                <i class="fas fa-language"></i> 翻译当前页
                             </button>
                             <button id="show-raw-btn" class="btn btn-outline btn-sm" onclick="showRawLayoutData()">
                                 <i class="fas fa-database"></i> 原始数据
@@ -380,43 +396,11 @@
             <div class="modal-body">
                 <div class="raw-data-info">
                     <span id="raw-data-count"></span>
-                    <button class="btn btn-primary btn-sm" onclick="showLayoutAnnotationImage()">
-                        <i class="fas fa-image"></i> 查看标注图片
-                    </button>
                 </div>
                 <pre id="raw-data-content" class="raw-data-content"></pre>
             </div>
             <div class="modal-footer">
                 <button class="btn btn-outline" onclick="closeRawDataModal()">关闭</button>
-            </div>
-        </div>
-    </div>
-
-    <div id="annotation-image-modal" class="modal hidden">
-        <div class="modal-content modal-extra-wide">
-            <div class="modal-header">
-                <h3>Layout 标注图片</h3>
-                <button class="modal-close" onclick="closeAnnotationImageModal()">&times;</button>
-            </div>
-            <div class="modal-body">
-                <div class="annotation-legend">
-                    <span class="legend-item"><span class="legend-color" style="background: #dc143c;"></span> Title</span>
-                    <span class="legend-item"><span class="legend-color" style="background: #0000ff;"></span> Section</span>
-                    <span class="legend-item"><span class="legend-color" style="background: #00bfff;"></span> Text</span>
-                    <span class="legend-item"><span class="legend-color" style="background: #008000;"></span> List</span>
-                    <span class="legend-item"><span class="legend-color" style="background: #ff4500;"></span> Table</span>
-                    <span class="legend-item"><span class="legend-color" style="background: #ffd700;"></span> Picture</span>
-                    <span class="legend-item"><span class="legend-color" style="background: #8a2be2;"></span> Formula</span>
-                    <span class="legend-item"><span class="legend-color" style="background: #ffa500;"></span> Caption</span>
-                    <span class="legend-item"><span class="legend-color" style="background: #808080;"></span> Footnote</span>
-                    <span class="legend-item"><span class="legend-color" style="background: #ff00ff;"></span> Header/Footer</span>
-                </div>
-                <div class="annotation-image-container">
-                    <img id="annotation-image" src="" alt="标注图片" style="max-width: 100%; height: auto;">
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button class="btn btn-outline" onclick="closeAnnotationImageModal()">关闭</button>
             </div>
         </div>
     </div>

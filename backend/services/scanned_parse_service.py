@@ -801,6 +801,10 @@ def _post_process_element_types(elements: list[dict], page_w: int, page_h: int) 
         is_short = len(first_line) <= 50
 
         # --- 页眉 ---
+        if y0 < page_h * 0.07 and elem['element_type'].lower() in ('section', 'section-header'):
+            elem['element_type'] = 'Page-header'
+            continue
+
         if y0 < page_h * 0.1 and is_short:
             # 不是表格标题的特征字符
             if not re.match(r'^表\s*\d+', first_line):
