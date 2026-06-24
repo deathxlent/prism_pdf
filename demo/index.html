@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Prism PDF - 静态演示</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="navbar-container">
+            <div class="navbar-brand">
+                <svg class="icon" viewBox="0 0 24 24"><path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z"/></svg>
+                <span>Prism PDF 演示系统</span>
+            </div>
+            <ul class="navbar-menu" id="navbar-menu">
+                <li class="nav-item active" data-route="home">
+                    <a href="#/home">
+                        <svg class="icon" viewBox="0 0 24 24"><path d="M10,20V14H14V20H19V12H22L12,3L2,12H5V20H10Z"/></svg>
+                        <span>首页</span>
+                    </a>
+                </li>
+            </ul>
+            <div class="navbar-right">
+                <span class="demo-badge">静态演示</span>
+            </div>
+        </div>
+    </nav>
+
+    <main id="app-container">
+        <div id="page-home" class="page active">
+            <section id="upload-section" class="card">
+                <h2>
+                    <svg class="icon" viewBox="0 0 24 24"><path d="M9,16V10H5L12,3L19,10H15V16H9M5,20V18H19V20H5Z"/></svg>
+                    上传 PDF 文件
+                </h2>
+                <div id="drop-zone" class="drop-zone">
+                    <svg class="icon icon-large" viewBox="0 0 24 24"><path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M14,16V10H10L14,16M19,15V17H5V15H19Z"/></svg>
+                    <p>此为静态演示，上传功能不可用</p>
+                    <p class="demo-hint">点击体验完整功能，请访问 GitHub 仓库</p>
+                </div>
+            </section>
+
+            <section id="documents-section" class="card">
+                <div class="section-header">
+                    <h2>
+                        <svg class="icon" viewBox="0 0 24 24"><path d="M20,18H4V8H20M20,6H12L10,4H4C2.89,4 2,4.89 2,6V18A2,2 0 0,0 4,20H20A2,2 0 0,0 22,18V8A2,2 0 0,0 20,6Z"/></svg>
+                        文档管理
+                    </h2>
+                </div>
+                <div id="documents-list" class="documents-list-view active"></div>
+            </section>
+        </div>
+
+        <div id="page-detail" class="page">
+            <div class="detail-header">
+                <button class="btn btn-outline" onclick="backToHome()">
+                    <svg class="icon" viewBox="0 0 24 24"><path d="M20,11V13H8L13.5,18.5L12.08,19.92L4.16,12L12.08,4.08L13.5,5.5L8,11H20Z"/></svg>
+                    返回
+                </button>
+                <h2 id="detail-title">文档详情</h2>
+                <div class="detail-actions">
+                    <span id="detail-status" class="status-badge"></span>
+                    <div class="btn-group" id="detail-export-group">
+                        <button class="btn btn-success" onclick="toggleDetailExportDropdown(event)" id="export-html-btn">
+                            <svg class="icon" viewBox="0 0 24 24"><path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M14,16V10H10L14,16M19,15V17H5V15H19Z"/></svg>
+                            导出
+                            <svg class="icon icon-small" viewBox="0 0 24 24"><path d="M7,10L12,15L17,10H7Z"/></svg>
+                        </button>
+                        <div class="export-dropdown" id="detail-export-dropdown">
+                            <div class="dropdown-section-title">原文</div>
+                            <button class="dropdown-item" onclick="downloadExport('document.html', 'document.html')">
+                                <svg class="icon" viewBox="0 0 24 24"><path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M14,16V10H10L14,16M19,15V17H5V15H19Z"/></svg>
+                                整本 HTML
+                            </button>
+                            <button class="dropdown-item" onclick="downloadExport('document.md', 'document.md')">
+                                <svg class="icon" viewBox="0 0 24 24"><path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M14,16V10H10L14,16M19,15V17H5V15H19Z"/></svg>
+                                整本 Markdown
+                            </button>
+                            <button class="dropdown-item" onclick="downloadExport('document_pages.zip', 'document_pages.zip')">
+                                <svg class="icon" viewBox="0 0 24 24"><path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M14,16V10H10L14,16M19,15V17H5V15H19Z"/></svg>
+                                每页 HTML ZIP
+                            </button>
+                            <div class="dropdown-divider"></div>
+                            <div class="dropdown-section-title">译文</div>
+                            <button class="dropdown-item" onclick="downloadExport('document_translated.html', 'document_translated.html')">
+                                <svg class="icon" viewBox="0 0 24 24"><path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M14,16V10H10L14,16M19,15V17H5V15H19Z"/></svg>
+                                译文 HTML
+                            </button>
+                            <button class="dropdown-item" onclick="downloadExport('document_translated.md', 'document_translated.md')">
+                                <svg class="icon" viewBox="0 0 24 24"><path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M14,16V10H10L14,16M19,15V17H5V15H19Z"/></svg>
+                                译文 Markdown
+                            </button>
+                            <button class="dropdown-item" onclick="downloadExport('document_translated_pages.zip', 'document_translated_pages.zip')">
+                                <svg class="icon" viewBox="0 0 24 24"><path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M14,16V10H10L14,16M19,15V17H5V15H19Z"/></svg>
+                                译文每页 HTML ZIP
+                            </button>
+                            <div class="dropdown-divider"></div>
+                            <div class="dropdown-section-title">RAG 友好</div>
+                            <button class="dropdown-item" onclick="downloadExport('document_rag.html', 'document_rag.html')">
+                                <svg class="icon" viewBox="0 0 24 24"><path d="M12,3C6.5,3 2,7.5 2,13S6.5,23 12,23S22,18.5 22,13S17.5,3 12,3M12,5C13.9,5 15.7,5.6 17.2,6.6L8.3,15.5C7.1,14.3 6.5,12.7 6.5,11C6.5,7.5 9,5 12,5M12,21C10.1,21 8.3,20.4 6.8,19.4L15.7,10.5C16.9,11.7 17.5,13.3 17.5,15C17.5,18.5 15,21 12,21Z"/></svg>
+                                RAG 友好格式
+                            </button>
+                            <button class="dropdown-item" onclick="downloadExport('document_rag_pages.zip', 'document_rag_pages.zip')">
+                                <svg class="icon" viewBox="0 0 24 24"><path d="M12,3C6.5,3 2,7.5 2,13S6.5,23 12,23S22,18.5 22,13S17.5,3 12,3M12,5C13.9,5 15.7,5.6 17.2,6.6L8.3,15.5C7.1,14.3 6.5,12.7 6.5,11C6.5,7.5 9,5 12,5M12,21C10.1,21 8.3,20.4 6.8,19.4L15.7,10.5C16.9,11.7 17.5,13.3 17.5,15C17.5,18.5 15,21 12,21Z"/></svg>
+                                RAG 友好分页格式
+                            </button>
+                            <div class="dropdown-divider"></div>
+                            <div class="dropdown-section-title">译文 RAG 友好</div>
+                            <button class="dropdown-item" onclick="downloadExport('document_translated_rag.html', 'document_translated_rag.html')">
+                                <svg class="icon" viewBox="0 0 24 24"><path d="M12,3C6.5,3 2,7.5 2,13S6.5,23 12,23S22,18.5 22,13S17.5,3 12,3M12,5C13.9,5 15.7,5.6 17.2,6.6L8.3,15.5C7.1,14.3 6.5,12.7 6.5,11C6.5,7.5 9,5 12,5M12,21C10.1,21 8.3,20.4 6.8,19.4L15.7,10.5C16.9,11.7 17.5,13.3 17.5,15C17.5,18.5 15,21 12,21Z"/></svg>
+                                译文 RAG 友好格式
+                            </button>
+                            <button class="dropdown-item" onclick="downloadExport('document_translated_rag_pages.zip', 'document_translated_rag_pages.zip')">
+                                <svg class="icon" viewBox="0 0 24 24"><path d="M12,3C6.5,3 2,7.5 2,13S6.5,23 12,23S22,18.5 22,13S17.5,3 12,3M12,5C13.9,5 15.7,5.6 17.2,6.6L8.3,15.5C7.1,14.3 6.5,12.7 6.5,11C6.5,7.5 9,5 12,5M12,21C10.1,21 8.3,20.4 6.8,19.4L15.7,10.5C16.9,11.7 17.5,13.3 17.5,15C17.5,18.5 15,21 12,21Z"/></svg>
+                                译文 RAG 友好分页格式
+                            </button>
+                        </div>
+                    </div>
+                    <button class="btn btn-primary" onclick="showDemoNotice('重解析')">
+                        <svg class="icon" viewBox="0 0 24 24"><path d="M17.65,6.35C16.2,4.9 14.21,4 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20C15.73,20 18.84,17.45 19.73,14H17.65C16.83,16.33 14.61,18 12,18A6,6 0 0,1 6,12A6,6 0 0,1 12,6C13.66,6 15.14,6.69 16.22,7.78L13,11H20V4L17.65,6.35Z"/></svg>
+                        重解析
+                    </button>
+                </div>
+            </div>
+            <div class="detail-container">
+                <div class="detail-col detail-col-thumbs">
+                    <div class="thumbs-header">
+                        <span>页面缩略图</span>
+                    </div>
+                    <div id="thumbs-list" class="thumbs-list"></div>
+                </div>
+                <div class="detail-col detail-col-pdf">
+                    <div class="pdf-header">
+                        <div class="pdf-search-container">
+                            <div class="pdf-search-box">
+                                <svg class="icon" viewBox="0 0 24 24"><path d="M9.5,3A6.5,6.5 0 0,1 16,9.5C16,11.11 15.41,12.59 14.44,13.73L14.71,14H15.5L20.5,19L19,20.5L14,15.5V14.71L13.73,14.44C12.59,15.41 11.11,16 9.5,16A6.5,6.5 0 0,1 3,9.5A6.5,6.5 0 0,1 9.5,3M9.5,5C7,5 5,7 5,9.5C5,12 7,14 9.5,14C12,14 14,12 14,9.5C14,7 12,5 9.5,5Z"/></svg>
+                                <input type="text" id="pdf-search-input" placeholder="搜索解析内容..." onkeyup="handleSearchKeyUp(event)">
+                                <span id="search-count" class="search-count hidden">0 结果</span>
+                            </div>
+                        </div>
+                        <span id="pdf-page-info">第 1 页</span>
+                        <div class="pdf-header-actions">
+                            <span id="unordered-badge" class="unordered-badge hidden" title="该页未经过Surya排序">
+                                <svg class="icon" viewBox="0 0 24 24"><path d="M13,13H11V7H13V13M13,17H11V15H13V17M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2Z"/></svg>
+                                未排序
+                            </span>
+                            <button class="btn btn-warning btn-sm" onclick="showDemoNotice('重排序')" id="reorder-btn" title="使用Surya模型重排序">
+                                <svg class="icon" viewBox="0 0 24 24"><path d="M3,21V18H7V21H3M3,15V12H11V15H3M3,9V6H15V9H3M18,15V18H21V15H18M18,12L13,7L8,12H18Z"/></svg>
+                                重排序
+                            </button>
+                            <div class="btn-group">
+                                <button class="btn btn-outline btn-sm" onclick="togglePageExportDropdown(event)" title="导出当前页">
+                                    <svg class="icon" viewBox="0 0 24 24"><path d="M5,20H19V18H5M19,9H15V3H9V9H5L12,16L19,9Z"/></svg>
+                                    导出
+                                    <svg class="icon icon-small" viewBox="0 0 24 24"><path d="M7,10L12,15L17,10H7Z"/></svg>
+                                </button>
+                                <div class="export-dropdown export-dropdown-right" id="page-export-dropdown">
+                                    <div class="dropdown-section-title">原文</div>
+                                    <button class="dropdown-item" onclick="exportCurrentPageHtml()">
+                                        <svg class="icon" viewBox="0 0 24 24"><path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z"/></svg>
+                                        原文 HTML
+                                    </button>
+                                    <button class="dropdown-item" onclick="exportCurrentPageMarkdown()">
+                                        <svg class="icon" viewBox="0 0 24 24"><path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z"/></svg>
+                                        原文 Markdown
+                                    </button>
+                                    <div class="dropdown-divider"></div>
+                                    <div class="dropdown-section-title">译文</div>
+                                    <button class="dropdown-item" onclick="exportCurrentPageHtmlZh()">
+                                        <svg class="icon" viewBox="0 0 24 24"><path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z"/></svg>
+                                        译文 HTML
+                                    </button>
+                                    <button class="dropdown-item" onclick="exportCurrentPageMarkdownZh()">
+                                        <svg class="icon" viewBox="0 0 24 24"><path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z"/></svg>
+                                        译文 Markdown
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="pdf-wrapper">
+                        <div id="pdf-container" class="pdf-container pdf-canvas-container">
+                            <div id="pdf-placeholder" class="pdf-placeholder">
+                                <svg class="icon icon-huge" viewBox="0 0 24 24"><path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M14,16V10H10L14,16M19,15V17H5V15H19Z"/></svg>
+                                <p>PDF 预览需要后端服务支持</p>
+                                <p class="placeholder-hint">此为静态演示，仅显示布局检测标注框</p>
+                            </div>
+                            <div id="annotation-layer" class="annotation-layer"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="detail-col detail-col-elements">
+                    <div class="elements-header">
+                        <span>解析结果</span>
+                        <div class="elements-actions">
+                            <button id="add-element-btn" class="btn btn-success btn-sm" onclick="toggleAddElementMode()">
+                                <svg class="icon" viewBox="0 0 24 24"><path d="M19,13H13V19H11V13H5V11H11V5H13V11H19V13Z"/></svg>
+                                添加元素
+                            </button>
+                            <button id="translate-page-btn" class="btn btn-info btn-sm hidden" onclick="showDemoNotice('翻译')">
+                                <svg class="icon" viewBox="0 0 24 24"><path d="M12.87,15.07L10.33,12.56L10.36,12.53C12.1,10.59 13.34,8.36 14.07,6H17V4H10V2H8V4H1V6H12.17C11.5,7.92 10.44,9.75 9,11.35C8.07,10.32 7.3,9.19 6.69,8H4.69C5.42,9.63 6.42,11.17 7.67,12.56L2.58,17.58L4,19L9,14L12.11,17.11L12.87,15.07M18.5,10H16.5L12,22H14L15.12,19H19.87L21,22H23L18.5,10M15.88,17L17.5,12.67L19.12,17H15.88Z"/></svg>
+                                翻译当前页
+                            </button>
+                            <button id="edit-order-btn" class="btn btn-outline btn-sm" onclick="toggleEditOrder()">
+                                <svg class="icon" viewBox="0 0 24 24"><path d="M3,21V18H7V21H3M3,15V12H11V15H3M3,9V6H15V9H3M18,15V18H21V15H18M18,12L13,7L8,12H18Z"/></svg>
+                                变更排序
+                            </button>
+                            <button id="save-order-btn" class="btn btn-success btn-sm hidden" onclick="saveOrder()">
+                                <svg class="icon" viewBox="0 0 24 24"><path d="M9,20.42L2.79,14.21L5.62,11.38L9,14.77L18.88,4.88L21.71,7.71L9,20.42Z"/></svg>
+                                保存
+                            </button>
+                            <button id="cancel-order-btn" class="btn btn-outline btn-sm hidden" onclick="cancelOrder()">
+                                <svg class="icon" viewBox="0 0 24 24"><path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"/></svg>
+                                取消
+                            </button>
+                        </div>
+                    </div>
+                    <div id="elements-list" class="elements-list"></div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <div id="add-element-modal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>添加新元素</h3>
+                <button class="modal-close" onclick="closeAddElementModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>区域坐标 (bbox)</label>
+                    <div id="add-element-bbox" style="padding: 0.5rem; background: var(--bg); border-radius: 4px; font-family: monospace; font-size: 0.85rem;">(0, 0, 0, 0)</div>
+                </div>
+                <div class="form-group">
+                    <label>元素类型</label>
+                    <select id="add-element-type" class="form-control">
+                        <option value="Text">Text</option>
+                        <option value="Title">Title</option>
+                        <option value="Section-header">Section</option>
+                        <option value="List-item">List</option>
+                        <option value="Table">Table</option>
+                        <option value="Picture">Picture</option>
+                        <option value="Formula">Formula</option>
+                        <option value="Caption">Caption</option>
+                        <option value="Footnote">Footnote</option>
+                        <option value="Page-header">Page Header</option>
+                        <option value="Page-footer">Page Footer</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>内容 (Markdown)</label>
+                    <textarea id="add-element-content" class="form-control" rows="10"></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" onclick="closeAddElementModal()">取消</button>
+                <button class="btn btn-primary" onclick="saveNewElement()">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="edit-modal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>编辑元素内容</h3>
+                <button class="modal-close" onclick="closeEditModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>元素类型</label>
+                    <select id="edit-type" class="form-control">
+                        <option value="Text">Text</option>
+                        <option value="Title">Title</option>
+                        <option value="Section-header">Section</option>
+                        <option value="List-item">List</option>
+                        <option value="Table">Table</option>
+                        <option value="Picture">Picture</option>
+                        <option value="Formula">Formula</option>
+                        <option value="Caption">Caption</option>
+                        <option value="Footnote">Footnote</option>
+                        <option value="Page-header">Page Header</option>
+                        <option value="Page-footer">Page Footer</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>内容 (Markdown)</label>
+                    <textarea id="edit-content" class="form-control" rows="10"></textarea>
+                </div>
+                <div id="edit-translated-group" class="form-group" style="display:none">
+                    <label>译文</label>
+                    <textarea id="edit-translated" class="form-control" rows="5"></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" onclick="closeEditModal()">取消</button>
+                <button class="btn btn-primary" onclick="saveElementEdit()">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="search-results-panel" class="search-results-panel hidden">
+        <div class="search-results-header">
+            <span>搜索结果</span>
+            <button class="btn btn-outline btn-sm" onclick="closeSearchResults()">
+                <svg class="icon" viewBox="0 0 24 24"><path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"/></svg>
+            </button>
+        </div>
+        <div id="search-results-list" class="search-results-list"></div>
+    </div>
+
+    <script src="js/mock-data.js"></script>
+    <script src="js/state.js"></script>
+    <script src="js/utils.js"></script>
+    <script src="js/ui.js"></script>
+    <script src="js/documents.js"></script>
+    <script src="js/detail.js"></script>
+    <script src="js/elements.js"></script>
+    <script src="js/export.js"></script>
+    <script src="js/pdfviewer.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>
